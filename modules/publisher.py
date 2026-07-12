@@ -55,6 +55,23 @@ def _base_date_from(report_path: Path) -> str:
 
 
 def publish(config: dict, report_path, *, to_dm: bool = False, dry_run: bool = False) -> list[str]:
+    """발행 파이프라인 오케스트레이션: 볼트 반입 → PDF 변환 → 텔레그램 전송.
+
+    파이프라인 단계 실패는 반환 리스트로 보고하지만, report_path 파일명이
+    `_YYYYMMDD.md` 패턴이 아니면 ValueError를 raise한다 (호출자[main.py 훅]이 감쌀 것).
+
+    Args:
+        config: 설정 딕셔너리 (publish·output 키 필수)
+        report_path: 보고서 markdown 파일 경로
+        to_dm: True면 telegram_channel 대신 notify_chat_id로 전송
+        dry_run: True면 파이프라인 스킵
+
+    Returns:
+        에러 메시지 리스트 (성공 시 빈 리스트)
+
+    Raises:
+        ValueError: report_path 파일명에서 기준일(_YYYYMMDD.md) 추출 불가
+    """
     pub = config.get("publish", {})
     report_path = Path(report_path)
     errors: list[str] = []
@@ -78,7 +95,7 @@ def publish(config: dict, report_path, *, to_dm: bool = False, dry_run: bool = F
         elif r.returncode == 2:
             errors.append(f"볼트 반입 lint 경고: {r.stderr.strip()[-300:]}")
     except Exception as e:
-        errors.append(f"볼트 반입 실행 오류: {e}")
+        errors.append(f"볼트 반입 실행 실패: {e}")
 
     # ② PDF → ③ 전송 (PDF 실패 시 전송만 스킵)
     try:
@@ -87,7 +104,7 @@ def publish(config: dict, report_path, *, to_dm: bool = False, dry_run: bool = F
             chat = pub["notify_chat_id"] if to_dm else pub["telegram_channel"]
             notifier.send_document(chat, pdf, caption=name)
         except Exception as e:
-            errors.append(f"텔레그램 전송 실패: {e}")
+            errors.append(f"전송 실패: {e}")
     except Exception as e:
         errors.append(f"PDF 변환 실패: {e}")
 

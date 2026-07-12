@@ -68,12 +68,13 @@ def test_publish_ingest_lint_warning_notifies_but_continues(tmp_path):
     md = _setup_report(tmp_path)
     with mock.patch.object(publisher, "dest_name_for", return_value="국내증시 자금동향_20260706~0710"), \
          mock.patch.object(publisher.subprocess, "run", return_value=mock.Mock(returncode=2, stderr="lint")), \
-         mock.patch.object(publisher.pdf_export, "md_to_pdf", side_effect=lambda m, p: p), \
-         mock.patch.object(publisher.notifier, "send_document"), \
+         mock.patch.object(publisher.pdf_export, "md_to_pdf", side_effect=lambda m, p: p) as pdf, \
+         mock.patch.object(publisher.notifier, "send_document") as send, \
          mock.patch.object(publisher.notifier, "send_message") as dm:
         errs = publisher.publish(CFG, md)
     assert len(errs) == 1 and "lint" in errs[0]
     dm.assert_called_once()  # 경고 DM
+    assert pdf.called and send.called  # 파이프라인이 계속되었음
 
 
 def test_publish_pdf_failure_skips_send_keeps_ingest(tmp_path):
@@ -98,3 +99,37 @@ def test_publish_dm_failure_swallowed(tmp_path):
          mock.patch.object(publisher.notifier, "send_message", side_effect=RuntimeError("tg down")):
         errs = publisher.publish(CFG, md)  # 예외로 죽지 않아야 함
     assert len(errs) >= 1
+
+
+def test_publish_ingest_launch_exception_counts_as_failure(tmp_path):
+    md = _setup_report(tmp_path)
+    with mock.patch.object(publisher, "dest_name_for", return_value="국내증시 자금동향_20260706~0710"), \
+         mock.patch.object(publisher.subprocess, "run", side_effect=OSError("ingest 스크립트 없음")), \
+         mock.patch.object(publisher.pdf_export, "md_to_pdf", side_effect=lambda m, p: p), \
+         mock.patch.object(publisher.notifier, "send_document"), \
+         mock.patch.object(publisher.notifier, "send_message"):
+        errs = publisher.publish(CFG, md)
+    assert any("실패" in e for e in errs)  # _main이 exit 1로 처리할 수 있어야 함
+
+
+def test_publish_send_failure_notifies_dm(tmp_path):
+    md = _setup_report(tmp_path)
+    with mock.patch.object(publisher, "dest_name_for", return_value="국내증시 자금동향_20260706~0710"), \
+         mock.patch.object(publisher.subprocess, "run", return_value=mock.Mock(returncode=0)), \
+         mock.patch.object(publisher.pdf_export, "md_to_pdf", side_effect=lambda m, p: p), \
+         mock.patch.object(publisher.notifier, "send_document", side_effect=RuntimeError("tg 500")) as send, \
+         mock.patch.object(publisher.notifier, "send_message") as dm:
+        errs = publisher.publish(CFG, md)
+    assert any("전송 실패" in e for e in errs)
+    dm.assert_called_once()
+
+
+def test_publish_to_dm_routes_document_to_notify_chat(tmp_path):
+    md = _setup_report(tmp_path)
+    with mock.patch.object(publisher, "dest_name_for", return_value="국내증시 자금동향_20260706~0710"), \
+         mock.patch.object(publisher.subprocess, "run", return_value=mock.Mock(returncode=0)), \
+         mock.patch.object(publisher.pdf_export, "md_to_pdf", side_effect=lambda m, p: p), \
+         mock.patch.object(publisher.notifier, "send_document") as send, \
+         mock.patch.object(publisher.notifier, "send_message"):
+        publisher.publish(CFG, md, to_dm=True)
+    assert send.call_args[0][0] == "988006216"
