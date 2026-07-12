@@ -23,7 +23,8 @@ def get_bot_token() -> str:
 
 
 def _post(method: str, *, data: dict, files: dict | None = None) -> None:
-    url = f"https://api.telegram.org/bot{get_bot_token()}/{method}"
+    token = get_bot_token()
+    url = f"https://api.telegram.org/bot{token}/{method}"
     last = None
     for attempt in range(2):  # 1회 재시도
         try:
@@ -32,7 +33,7 @@ def _post(method: str, *, data: dict, files: dict | None = None) -> None:
                 return
             last = f"HTTP {resp.status_code}: {resp.json()}"
         except requests.RequestException as e:
-            last = str(e)
+            last = str(e).replace(token, "***")
         if attempt == 0:
             time.sleep(3)
     raise RuntimeError(f"텔레그램 {method} 실패: {last}")

@@ -43,7 +43,20 @@ def test_send_document_retries_once_then_raises(tmp_path: Path):
     f = tmp_path / "r.pdf"
     f.write_bytes(b"x")
     with mock.patch.object(notifier, "get_bot_token", return_value="T"), \
+         mock.patch.object(notifier.time, "sleep"), \
          mock.patch.object(notifier.requests, "post", return_value=_resp(ok=False)) as post:
         with pytest.raises(RuntimeError):
             notifier.send_document("-100123", f, caption="c")
         assert post.call_count == 2
+
+
+def test_post_redacts_token_on_network_error():
+    with mock.patch.object(notifier, "get_bot_token", return_value="SECRETTOKEN123"), \
+         mock.patch.object(notifier.time, "sleep"), \
+         mock.patch.object(notifier.requests, "post",
+                           side_effect=notifier.requests.RequestException(
+                               "Max retries exceeded with url: /botSECRETTOKEN123/sendMessage")):
+        with pytest.raises(RuntimeError) as ei:
+            notifier.send_message("123", "x")
+        assert "SECRETTOKEN123" not in str(ei.value)
+        assert "***" in str(ei.value)
