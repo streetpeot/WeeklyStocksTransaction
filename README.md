@@ -48,6 +48,7 @@
 [4] exporter.py     Excel 5탭 저장
 [5] visualizer.py   차트 PNG 6종
 [6] reporter.py     Claude API 3회 분할 호출 → Markdown 보고서
+[7] publisher.py    볼트 반입 + PDF + 텔레그램
 ```
 
 ---
@@ -107,6 +108,13 @@ output:
   excel_prefix: "주가자금동향"          # 파일명: 주가자금동향_YYYYMMDD.xlsx
   report_prefix: "주가자금동향"
   max_weeks: 52                        # DB 최대 보관 주 수
+
+publish:
+  vault_ingest: "/path/to/obsidian-vault/scripts/vault_ingest.py"   # 공용 반입 CLI 경로
+  title_prefix: "국내증시 자금동향"      # 볼트 반입 파일명 접두사(주간 범위가 뒤에 붙음)
+  pdf_enabled: true                    # true면 보고서를 PDF로 변환해 채널 전송
+  telegram_channel: "-100XXXXXXXXXX"   # PDF를 보낼 텔레그램 채널 chat_id
+  notify_chat_id: "XXXXXXXXX"          # 실패 시 경고 DM을 받을 chat_id
 ```
 
 ### KIS API 발급
@@ -114,6 +122,17 @@ output:
 1. [한국투자증권 Developers](https://apiportal.koreainvestment.com) 가입
 2. 앱 등록 → `app_key`, `app_secret` 발급
 3. 모의투자 또는 실전 계좌번호 확인
+
+### 텔레그램 봇 토큰 (키체인)
+
+`publish` 단계(채널 PDF 전송·DM 경고)는 봇 토큰을 `config.yaml`이 아닌 macOS 키체인에서 읽는다(평문 시크릿 금지). 서비스명 `telegram-bot-memtrack`, 계정 `sjbossa`.
+
+```bash
+# 최초 1회 등록
+security add-generic-password -U -s telegram-bot-memtrack -a sjbossa -w <봇_토큰>
+```
+
+`modules/notifier.py`가 `security find-generic-password`로 조회하며, 키체인에 없으면 위 명령을 안내하는 예외를 던진다.
 
 ---
 
@@ -132,6 +151,25 @@ cd /path/to/WeeklyStocksTransaction
 
 # 특정 날짜의 보고서 재생성
 .venv/bin/python regen_report.py 20260228
+```
+
+### 발행 자동화 (볼트 반입 · PDF · 텔레그램)
+
+파이프라인 성공 후 `main.py`의 `[7] publisher.py` 단계가 자동 실행되어 보고서를 볼트에 반입하고(`config.yaml`의 `publish.vault_ingest` 스크립트 호출), `pdf_export.py`로 PDF 변환 후 `notifier.py`로 텔레그램 채널에 전송한다. 이 단계는 try/except로 감싸여 있어 실패해도 파이프라인 자체는 성공으로 종료된다(실패 시 `notify_chat_id`로 DM 경고).
+
+`--midweek`(월~목 중간 수급동향 수동 실행)로 실행한 경우에는 발행 단계를 생략한다 — 주간 확정치가 아닌 임시 집계이므로 볼트 반입·채널 전송 대상이 아니다.
+
+발행 단계만 수동으로 재실행하려면:
+
+```bash
+# 특정 날짜의 보고서를 볼트에 반입 + PDF 채널 전송
+.venv/bin/python -m modules.publisher --date 20260710
+
+# 채널 전송 없이 DM으로만 전송(테스트용)
+.venv/bin/python -m modules.publisher --date 20260710 --dm
+
+# 실제 반입·전송 없이 동작만 확인
+.venv/bin/python -m modules.publisher --date 20260710 --dry-run
 ```
 
 ### 스케줄러 모드 (레거시, 비권장)
