@@ -170,12 +170,14 @@ def run_pipeline(config: dict, midweek: bool = False):
     logger.info("=" * 60)
 
     # [7] 발행 — 볼트 반입·PDF·텔레그램. 실패해도 파이프라인은 성공으로 끝낸다.
-    if config.get("publish"):
+    if config.get("publish") and not midweek:
         try:
             from modules import publisher
             publisher.publish(config, report_path)
         except Exception:
             logging.exception("발행 단계 예외 (파이프라인은 계속)")
+    elif midweek and config.get("publish"):
+        logging.info("중간 실행(midweek) — 발행 단계 생략")
 
 
 # ─────────────────────────────────────────
