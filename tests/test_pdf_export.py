@@ -34,7 +34,7 @@ def test_md_to_pdf_creates_real_pdf_and_cleans_temp_html(tmp_path: Path):
     assert result == pdf_path
     assert pdf_path.exists()
     assert pdf_path.read_bytes().startswith(b"%PDF")
-    assert pdf_path.stat().st_size > 1000
+    assert pdf_path.stat().st_size > 5000
     # 임시 HTML은 md와 같은 폴더에 만들어졌다가 삭제되어야 한다
     assert list(md_path.parent.glob("*.html")) == []
 

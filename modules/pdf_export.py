@@ -48,15 +48,15 @@ def md_to_pdf(md_path: Path, pdf_path: Path) -> Path:
         raise RuntimeError(f"Chrome을 찾을 수 없음: {CHROME_PATH}")
 
     pdf_path.parent.mkdir(parents=True, exist_ok=True)
-    html_path = md_path.with_suffix(".html")  # md와 같은 폴더 → 상대경로 보존
+    html_path = md_path.parent / f"_{md_path.stem}.tmp.html"  # 충돌 방지 임시파일명
     html_path.write_text(_render_html(md_path), encoding="utf-8")
 
     try:
         try:
             result = subprocess.run(
-                [CHROME_PATH, "--headless", "--disable-gpu", "--no-pdf-header-footer",
+                [CHROME_PATH, "--headless=new", "--disable-gpu", "--no-pdf-header-footer",
                  f"--print-to-pdf={pdf_path}", html_path.as_uri()],
-                capture_output=True, text=True, timeout=60,
+                capture_output=True, text=True, timeout=180,
             )
         except subprocess.SubprocessError as e:
             raise RuntimeError(f"PDF 변환 실패: {e}") from e
