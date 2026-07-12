@@ -40,6 +40,8 @@ def compute_week_range(base_date: str) -> str:
         days = _calendar_weekdays(monday, base)
     if not days:
         days = [base_date]
+    if days and days[-1] != base_date:
+        logger.warning(f"주간 범위 끝({days[-1]})이 기준일({base_date})과 다름 — 공휴일 또는 KRX 데이터 지연 가능")
     return days[0] if days[0] == days[-1] else f"{days[0]}~{days[-1][4:]}"
 
 
@@ -90,23 +92,26 @@ def publish(config: dict, report_path, *, to_dm: bool = False, dry_run: bool = F
              "--doc-type", "수급동향", "--file", str(report_path),
              "--dest-name", name, "--assets", chart_glob],
             capture_output=True, text=True, timeout=600)
-        if r.returncode == 1:
-            errors.append(f"볼트 반입 실패: {r.stderr.strip()[-300:]}")
-        elif r.returncode == 2:
+        if r.returncode == 2 and "반입 완료" in r.stdout:
             errors.append(f"볼트 반입 lint 경고: {r.stderr.strip()[-300:]}")
+        elif r.returncode != 0:
+            errors.append(f"볼트 반입 실패: {r.stderr.strip()[-300:]}")
     except Exception as e:
         errors.append(f"볼트 반입 실행 실패: {e}")
 
     # ② PDF → ③ 전송 (PDF 실패 시 전송만 스킵)
-    try:
-        pdf = pdf_export.md_to_pdf(report_path, report_path.parent / "pdf" / f"{name}.pdf")
+    if pub.get("pdf_enabled", True):
         try:
-            chat = pub["notify_chat_id"] if to_dm else pub["telegram_channel"]
-            notifier.send_document(chat, pdf, caption=name)
+            pdf = pdf_export.md_to_pdf(report_path, report_path.parent / "pdf" / f"{name}.pdf")
+            try:
+                chat = pub["notify_chat_id"] if to_dm else pub["telegram_channel"]
+                notifier.send_document(chat, pdf, caption=name)
+            except Exception as e:
+                errors.append(f"전송 실패: {e}")
         except Exception as e:
-            errors.append(f"전송 실패: {e}")
-    except Exception as e:
-        errors.append(f"PDF 변환 실패: {e}")
+            errors.append(f"PDF 변환 실패: {e}")
+    else:
+        logger.info("pdf_enabled=false — PDF 변환·전송 생략")
 
     # ④ 통지 (실패는 삼킨다 — 로그만)
     if errors:
