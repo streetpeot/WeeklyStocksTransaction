@@ -8,3 +8,4 @@ pipeline*.log
 *.pyc
 config.yaml
 .kis_token_cache.json
+.superpowers/
