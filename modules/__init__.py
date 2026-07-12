@@ -1,0 +1,1 @@
+# WeeklyStocksTransaction modules package

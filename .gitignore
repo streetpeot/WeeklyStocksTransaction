@@ -1,0 +1,10 @@
+__pycache__/
+.venv/
+data/
+history*.db*
+pipeline*.log
+.env
+.DS_Store
+*.pyc
+config.yaml
+.kis_token_cache.json
