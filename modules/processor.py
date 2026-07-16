@@ -356,5 +356,7 @@ def process(raw: dict) -> dict:
     processed["is_midweek"] = raw.get("is_midweek", False)
     processed["period_label"] = raw.get("period_label", "")
     processed["flow_source"] = raw.get("flow_source", "naver")
+    processed["etf_flows"] = raw.get("etf_flows", pd.DataFrame())
+    processed["etf_market_agg"] = raw.get("etf_market_agg")
 
     return processed

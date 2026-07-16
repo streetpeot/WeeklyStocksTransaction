@@ -247,6 +247,28 @@ class Database:
                     (week_date, market, ticker, inst_val, fore_val, flow_source),
                 )
 
+        # ETF 수급 (market="ETF") — 기존 KOSPI/KOSDAQ 조회는 market 필터라 무해
+        etf = processed.get("etf_flows", pd.DataFrame())
+        if isinstance(etf, pd.DataFrame) and not etf.empty:
+            for _, row in etf.iterrows():
+                ticker = row.get("티커")
+                if not ticker:
+                    continue
+                inst = row.get("1주기관매매")
+                fore = row.get("1주외국인매매")
+                inst_val = float(inst) if inst is not None and pd.notna(inst) else None
+                fore_val = float(fore) if fore is not None and pd.notna(fore) else None
+                if inst_val is None and fore_val is None:
+                    continue
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO weekly_stock
+                    (week_date, market, ticker, inst_net_1w, foreign_net_1w, flow_source)
+                    VALUES (?, 'ETF', ?, ?, ?, ?)
+                    """,
+                    (week_date, ticker, inst_val, fore_val, flow_source),
+                )
+
     def _trim_old_weeks(self, conn: sqlite3.Connection, table: str, max_weeks: int):
         """가장 오래된 주를 삭제하여 max_weeks 유지"""
         rows = conn.execute(

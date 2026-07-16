@@ -59,3 +59,36 @@ def test_get_stock_flow_history(db):
     hist = db.get_stock_flow_history("005930", "KOSPI", n_weeks=2)
     assert list(hist["week_date"]) == ["20260710", "20260717"]  # 오름차순, 최근 2주
     assert list(hist["inst_net_1w"]) == [2.0, 3.0]
+
+
+def test_upsert_stock_persists_etf(db):
+    processed = {
+        "kospi": pd.DataFrame(), "kosdaq": pd.DataFrame(),
+        "flow_source": "krx",
+        "etf_flows": pd.DataFrame({
+            "티커": ["069500"], "종목명": ["KODEX 200"],
+            "1주기관매매": [-100.0], "1주외국인매매": [50.0],
+        }),
+    }
+    with db._connect() as conn:
+        db._upsert_stock(conn, "20260717", processed)
+        row = conn.execute(
+            "SELECT market, inst_net_1w, foreign_net_1w, flow_source "
+            "FROM weekly_stock WHERE ticker='069500'"
+        ).fetchone()
+    assert row == ("ETF", -100.0, 50.0, "krx")
+
+
+def test_etf_rows_inert_to_market_queries(db):
+    """ETF 행은 KOSPI/KOSDAQ 조회에 영향 없음."""
+    processed = {
+        "kospi": pd.DataFrame({"티커": ["005930"], "1주기관매매": [1.0], "1주외국인매매": [2.0]}),
+        "kosdaq": pd.DataFrame(),
+        "flow_source": "krx",
+        "etf_flows": pd.DataFrame({"티커": ["069500"], "종목명": ["KODEX 200"],
+                                   "1주기관매매": [-100.0], "1주외국인매매": [50.0]}),
+    }
+    with db._connect() as conn:
+        db._upsert_stock(conn, "20260717", processed)
+    acc = db.get_stock_investor_accumulate("KOSPI", 1)
+    assert list(acc["ticker"]) == ["005930"]     # ETF 미포함
