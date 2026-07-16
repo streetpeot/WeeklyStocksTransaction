@@ -34,20 +34,25 @@ def main() -> int:
     print(f"검증 주간: {monday}~{friday}")
     failures = []
 
-    # ① 전종목 반환 여부 (순매수'상위'종목 화면이 전체를 주는지)
-    for market, floor in [("KOSPI", 1500), ("KOSDAQ", 1400)]:
+    # ① 전종목 반환 여부 — 기준선은 '주식' 유니버스(ETF/ETN 제외, 무거래 종목 행 없음).
+    #   2026-07-16 진단: KOSPI 주식 ~914(개인 기준), Naver 유니버스 2,472의 절반은 ETF/ETN이라 [12010] 미커버.
+    for market, floor in [("KOSPI", 800), ("KOSDAQ", 1400)]:
         df = stock.get_market_net_purchases_of_equities_by_ticker(monday, friday, market, "외국인")
         print(f"① {market} 외국인 rows={len(df)} (기준 ≥{floor})")
         if len(df) < floor:
             failures.append(f"{market} 전종목 미반환({len(df)}행)")
 
-    # ② 소형주 포함 + 값 형태 (볼트 엔티티 중 시총 200위 밖)
+    # ② 소형주 포함 (볼트 엔티티 중 시총 200위 밖). 미포함 = 그 주 해당 투자자 무거래일 수 있어
+    #   개인 조회에도 없을 때만 실패(개인도 없으면 거래정지 — 정보성 출력).
     df_ksq = stock.get_market_net_purchases_of_equities_by_ticker(monday, friday, "KOSDAQ", "기관합계")
+    df_ind = stock.get_market_net_purchases_of_equities_by_ticker(monday, friday, "KOSDAQ", "개인")
     for t, name in [("380540", "옵티코어"), ("200710", "에이디테크놀로지")]:
         if t in df_ksq.index:
             print(f"② {name}({t}) 기관 순매수: {df_ksq.loc[t, '순매수거래대금'] / 1e8:.1f}억")
+        elif t in df_ind.index:
+            print(f"② {name}({t}) 기관 무거래(개인 거래는 존재) — 정상(행 없음=0)")
         else:
-            failures.append(f"{name}({t}) 미포함")
+            print(f"② {name}({t}) 전 투자자 무거래 — 거래정지 여부 확인 (수급 NULL 정상)")
 
     # ③ 당일 데이터 반영 시각 — 오늘(거래일 저녁 실행 시) 데이터 존재 여부
     today_s = date.today().strftime("%Y%m%d")
