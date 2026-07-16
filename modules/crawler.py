@@ -874,12 +874,13 @@ def crawl_krx_investor_flows(fromdate: str, todate: str) -> pd.DataFrame:
 # KRX ETF 투자자 순매수 (시장 집계 1콜 + 개별 ETF 루프)
 # ─────────────────────────────────────────
 
-def crawl_krx_etf_flows(fromdate: str, todate: str, time_budget: float = 300.0):
-    """KRX ETF 투자자 순매수 — 시장 전체 집계(1콜) + 개별 ETF 티커별 순매수.
+def crawl_krx_etf_flows(fromdate: str, todate: str, top_n: int = 120, time_budget: float = 300.0):
+    """KRX ETF 투자자 순매수 — 시장 전체 집계(1콜) + 거래대금 상위 top_n ETF 순매수.
 
     Returns: (etf_flows[티커,종목명,1주기관매매,1주외국인매매], etf_market_agg{외국인,기관,개인}|None)
     best-effort: 개별 티커 예외 스킵, time_budget(초) 초과 시 루프 중단, 집계 실패 시 None.
     거래대금 기준(억원). ETF 미거래 종목은 행 없음.
+    KRX rate-limit(세션당 ~200콜) 회피 위해 전량이 아닌 거래대금 상위 top_n(기본 120)만 순회.
     """
     import time as _time
 
@@ -897,8 +898,14 @@ def crawl_krx_etf_flows(fromdate: str, todate: str, time_budget: float = 300.0):
         logger.warning(f"ETF 시장 집계 실패: {e}")
         agg = None
 
-    # 개별 ETF 루프 (get_etf_ticker_list가 이름 캐시 워밍 → get_etf_ticker_name 로컬)
-    tickers = stock.get_etf_ticker_list(todate)
+    # 개별 ETF 루프 — 거래대금 상위 top_n만 (KRX rate-limit[~200콜/세션] 회피)
+    stock.get_etf_ticker_list(todate)  # 이름 캐시 워밍 (get_etf_ticker_name 로컬화)
+    try:
+        pc = stock.get_etf_price_change_by_ticker(fromdate, todate)
+        tickers = list(pc.sort_values("거래대금", ascending=False).head(top_n).index)
+    except Exception as e:
+        logger.warning(f"ETF 거래대금 랭킹 실패({e}) → 이름목록 상위 {top_n}")
+        tickers = stock.get_etf_ticker_list(todate)[:top_n]
     rows = []
     t0 = _time.time()
     for i, t in enumerate(tickers):

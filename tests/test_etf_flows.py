@@ -27,7 +27,10 @@ def test_crawl_etf_flows_market_agg_and_per_ticker():
             return agg_df
         return per[args[0]]
 
+    pc = pd.DataFrame({"거래대금": [100, 200]}, index=pd.Index(["069500", "229200"], name="티커"))
+
     with patch("pykrx.stock.get_etf_trading_volume_and_value", side_effect=fake), \
+         patch("pykrx.stock.get_etf_price_change_by_ticker", return_value=pc), \
          patch("pykrx.stock.get_etf_ticker_list", return_value=["069500", "229200"]), \
          patch("pykrx.stock.get_etf_ticker_name", side_effect=lambda t: {"069500": "KODEX 200", "229200": "KODEX 코스닥150"}[t]):
         flows, agg = crawler.crawl_krx_etf_flows("20260706", "20260710")
@@ -48,13 +51,35 @@ def test_crawl_etf_flows_skips_failed_ticker():
             raise Exception("ticker fail")          # 개별 실패 → 스킵
         return _investor_df({"기관합계": 1e8, "외국인": 2e8})
 
+    pc = pd.DataFrame({"거래대금": [100, 200]}, index=pd.Index(["BAD", "069500"], name="티커"))
+
     with patch("pykrx.stock.get_etf_trading_volume_and_value", side_effect=fake), \
+         patch("pykrx.stock.get_etf_price_change_by_ticker", return_value=pc), \
          patch("pykrx.stock.get_etf_ticker_list", return_value=["BAD", "069500"]), \
          patch("pykrx.stock.get_etf_ticker_name", side_effect=lambda t: "이름"):
         flows, agg = crawler.crawl_krx_etf_flows("20260706", "20260710")
 
     assert agg is None
     assert list(flows["티커"]) == ["069500"]      # BAD 스킵
+
+
+def test_crawl_etf_flows_limits_to_top_n_by_value():
+    pc = pd.DataFrame({"거래대금": [900, 100, 500, 50, 700]},
+                      index=pd.Index(["A", "B", "C", "D", "E"], name="티커"))
+    queried = []
+    def fake(fromdate, todate, *args):
+        if not args:
+            return _investor_df({"외국인": 1e8})
+        queried.append(args[0])
+        return _investor_df({"기관합계": 1e8, "외국인": 2e8})
+    with patch("pykrx.stock.get_etf_trading_volume_and_value", side_effect=fake), \
+         patch("pykrx.stock.get_etf_price_change_by_ticker", return_value=pc), \
+         patch("pykrx.stock.get_etf_ticker_list", return_value=["A","B","C","D","E"]), \
+         patch("pykrx.stock.get_etf_ticker_name", side_effect=lambda t: t):
+        flows, agg = crawler.crawl_krx_etf_flows("20260713", "20260716", top_n=2)
+
+    assert set(queried) == {"A", "E"}       # 거래대금 상위 2 = A(900), E(700)
+    assert set(flows["티커"]) == {"A", "E"}
 
 
 def test_collect_all_wires_etf(monkeypatch):
