@@ -160,6 +160,54 @@ def test_publish_to_dm_routes_document_to_notify_chat(tmp_path):
     assert send.call_args[0][0] == "988006216"
 
 
+def test_publish_personal_routes_vault_and_dm(tmp_path):
+    """개인용 있으면: 볼트=개인용, 채널=공유용 PDF, DM=개인용 PDF."""
+    md = _setup_report(tmp_path)
+    personal = tmp_path / "주가자금동향_개인_20260710.md"
+    personal.write_text("---\ntitle: x\n---\n# r\n## 워치리스트 수급\n", encoding="utf-8")
+    with mock.patch.object(publisher, "dest_name_for", return_value="국내증시 자금동향_20260706~0710"), \
+         mock.patch.object(publisher.subprocess, "run",
+                           return_value=mock.Mock(returncode=0, stdout="반입 완료", stderr="")) as ingest, \
+         mock.patch.object(publisher.pdf_export, "md_to_pdf", side_effect=lambda m, p: p) as pdf, \
+         mock.patch.object(publisher.notifier, "send_document") as send, \
+         mock.patch.object(publisher.notifier, "send_message") as dm:
+        errs = publisher.publish(CFG, md, personal_path=personal)
+    assert errs == []
+    # 볼트 반입 = 개인용
+    ingest_cmd = ingest.call_args[0][0]
+    assert str(personal) in ingest_cmd
+    assert str(md) not in ingest_cmd
+    # 채널=공유용 PDF, DM=개인용 PDF (둘 다 전송)
+    assert send.call_count == 2
+    calls = {c[0][0]: c for c in send.call_args_list}
+    assert "-1004491335260" in calls  # telegram_channel
+    assert "988006216" in calls  # notify_chat_id
+    dm_call = calls["988006216"]
+    assert "_개인" in str(dm_call[0][1])
+    assert dm_call[1]["caption"] == "국내증시 자금동향_20260706~0710 · 워치리스트"
+    assert pdf.call_count == 2
+    dm.assert_not_called()  # 경고 통지는 없음(별개 경로)
+
+
+def test_publish_without_personal_keeps_current_behavior(tmp_path):
+    """personal_path=None이면 현행과 동일: 볼트=공유용, 채널만 전송, DM 없음."""
+    md = _setup_report(tmp_path)
+    with mock.patch.object(publisher, "dest_name_for", return_value="국내증시 자금동향_20260706~0710"), \
+         mock.patch.object(publisher.subprocess, "run",
+                           return_value=mock.Mock(returncode=0, stdout="반입 완료", stderr="")) as ingest, \
+         mock.patch.object(publisher.pdf_export, "md_to_pdf", side_effect=lambda m, p: p) as pdf, \
+         mock.patch.object(publisher.notifier, "send_document") as send, \
+         mock.patch.object(publisher.notifier, "send_message") as dm:
+        errs = publisher.publish(CFG, md)
+    assert errs == []
+    ingest_cmd = ingest.call_args[0][0]
+    assert str(md) in ingest_cmd
+    assert send.call_count == 1
+    assert send.call_args[0][0] == "-1004491335260"
+    assert pdf.call_count == 1
+    dm.assert_not_called()
+
+
 def test_publish_pdf_disabled_skips_pdf_and_send(tmp_path):
     md = _setup_report(tmp_path)
     cfg = {**CFG, "publish": {**CFG["publish"], "pdf_enabled": False}}
@@ -170,4 +218,23 @@ def test_publish_pdf_disabled_skips_pdf_and_send(tmp_path):
          mock.patch.object(publisher.notifier, "send_message") as dm:
         errs = publisher.publish(cfg, md)
     assert errs == []
+    pdf.assert_not_called(); send.assert_not_called(); dm.assert_not_called()
+
+
+def test_publish_pdf_disabled_skips_personal_dm_too(tmp_path):
+    """pdf_enabled=False면 personal_path가 있어도 개인용 DM 전송을 생략한다."""
+    md = _setup_report(tmp_path)
+    personal = tmp_path / "주가자금동향_개인_20260710.md"
+    personal.write_text("---\ntitle: x\n---\n# r\n## 워치리스트 수급\n", encoding="utf-8")
+    cfg = {**CFG, "publish": {**CFG["publish"], "pdf_enabled": False}}
+    with mock.patch.object(publisher, "dest_name_for", return_value="국내증시 자금동향_20260706~0710"), \
+         mock.patch.object(publisher.subprocess, "run",
+                           return_value=mock.Mock(returncode=0, stdout="반입 완료", stderr="")) as ingest, \
+         mock.patch.object(publisher.pdf_export, "md_to_pdf") as pdf, \
+         mock.patch.object(publisher.notifier, "send_document") as send, \
+         mock.patch.object(publisher.notifier, "send_message") as dm:
+        errs = publisher.publish(cfg, md, personal_path=personal)
+    assert errs == []
+    # 볼트 반입만은 여전히 개인용 라우팅
+    assert str(personal) in ingest.call_args[0][0]
     pdf.assert_not_called(); send.assert_not_called(); dm.assert_not_called()
