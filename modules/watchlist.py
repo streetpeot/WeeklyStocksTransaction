@@ -96,7 +96,7 @@ def build_watchlist_section(wl: pd.DataFrame, processed: dict, db) -> str:
 
 def generate_personal_report(report_path: str, processed: dict, db, config: dict) -> Optional[str]:
     """공유용 보고서 + 워치리스트 섹션 → 개인용 md 저장. 워치리스트 없으면 None."""
-    wl_path = config.get("publish", {}).get("watchlist_path", "")
+    wl_path = (config.get("publish") or {}).get("watchlist_path", "")
     if not wl_path:
         logger.info("watchlist_path 미설정 — 개인용 보고서 생략")
         return None

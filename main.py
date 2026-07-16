@@ -113,9 +113,23 @@ def run_pipeline(config: dict, midweek: bool = False):
     from modules import crawler, processor, database, exporter, visualizer, reporter
     from modules.processor import detect_rotation
 
+    # KRX 자격증명 주입 (키체인 → 환경변수). 실패해도 계속 — crawler가 폴백.
+    from modules import krx_auth
+    krx_auth.inject_credentials()
+
     # [1] 데이터 수집
-    logger.info("[1/6] 데이터 수집 (KIS + pykrx + 네이버금융)...")
+    logger.info("[1/6] 데이터 수집 (KIS + KRX + 네이버금융)...")
     raw = crawler.collect_all(config, midweek=midweek)
+
+    # KRX 폴백 시 DM 경고 (스펙 §4.1)
+    if raw.get("flow_source") == "naver" and config.get("publish"):
+        try:
+            from modules import notifier
+            notifier.send_message(
+                config["publish"]["notify_chat_id"],
+                "⚠️ WST: KRX 전종목 수급 실패 — Naver 상위200 폴백으로 진행")
+        except Exception:
+            logger.exception("KRX 폴백 통지 실패 (무시)")
 
     # [2] 데이터 가공
     logger.info("[2/6] 데이터 가공 (파생 컬럼 + 섹터 집계)...")
@@ -169,11 +183,19 @@ def run_pipeline(config: dict, midweek: bool = False):
     logger.info(f"  차트:   {len(chart_paths)}개")
     logger.info("=" * 60)
 
+    # [6.5] 개인용 보고서 (공유용 + 워치리스트 섹션 — LLM 미사용)
+    personal_path = None
+    try:
+        from modules import watchlist
+        personal_path = watchlist.generate_personal_report(report_path, processed, db, config)
+    except Exception:
+        logger.exception("개인용 보고서 생성 실패 (공유용만 발행)")
+
     # [7] 발행 — 볼트 반입·PDF·텔레그램. 실패해도 파이프라인은 성공으로 끝낸다.
     if config.get("publish") and not midweek:
         try:
             from modules import publisher
-            publisher.publish(config, report_path)
+            publisher.publish(config, report_path, personal_path=personal_path)
         except Exception:
             logging.exception("발행 단계 예외 (파이프라인은 계속)")
     elif midweek and config.get("publish"):
