@@ -542,6 +542,20 @@ def _append_charts(section_text: str, base_date: str, charts: list) -> str:
 
 
 # ─────────────────────────────────────────
+# ETF 수급 섹션 삽입
+# ─────────────────────────────────────────
+
+def _append_etf_section(report_text: str, processed: dict) -> str:
+    """ETF 수급 섹션을 본문 뒤에 결정적 삽입(있을 때만). 공유용에 포함 → 개인용 상속."""
+    from modules import etf_section
+    etf_md = etf_section.build_etf_section(
+        processed.get("etf_flows"), processed.get("etf_market_agg"))
+    if etf_md:
+        return report_text.rstrip() + "\n\n---\n\n" + etf_md
+    return report_text
+
+
+# ─────────────────────────────────────────
 # 보고서 생성 (3회 분할 API 호출)
 # ─────────────────────────────────────────
 
@@ -611,6 +625,12 @@ def generate_report(
         sections.append(text)
 
     report_text = "\n\n---\n\n".join(sections)
+
+    # ETF 수급 섹션 (결정적 — LLM 미사용). 실패해도 본문은 유지.
+    try:
+        report_text = _append_etf_section(report_text, processed)
+    except Exception:
+        logger.exception("ETF 섹션 삽입 실패 (본문 유지)")
 
     # Obsidian LLM-wiki 메타데이터 표준 frontmatter (수급동향 스키마)
     iso_date = f"{base_date[:4]}-{base_date[4:6]}-{base_date[6:8]}" if len(base_date) == 8 else base_date
