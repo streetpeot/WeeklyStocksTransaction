@@ -871,6 +871,59 @@ def crawl_krx_investor_flows(fromdate: str, todate: str) -> pd.DataFrame:
 
 
 # ─────────────────────────────────────────
+# KRX ETF 투자자 순매수 (시장 집계 1콜 + 개별 ETF 루프)
+# ─────────────────────────────────────────
+
+def crawl_krx_etf_flows(fromdate: str, todate: str, time_budget: float = 300.0):
+    """KRX ETF 투자자 순매수 — 시장 전체 집계(1콜) + 개별 ETF 티커별 순매수.
+
+    Returns: (etf_flows[티커,종목명,1주기관매매,1주외국인매매], etf_market_agg{외국인,기관,개인}|None)
+    best-effort: 개별 티커 예외 스킵, time_budget(초) 초과 시 루프 중단, 집계 실패 시 None.
+    거래대금 기준(억원). ETF 미거래 종목은 행 없음.
+    """
+    import time as _time
+
+    from pykrx import stock  # 지연 import — 테스트에서 mock 대상
+
+    # 시장 전체 집계 (1콜)
+    agg = None
+    try:
+        m = stock.get_etf_trading_volume_and_value(fromdate, todate)
+        agg = {}
+        for key, label in [("외국인", "외국인"), ("기관", "기관합계"), ("개인", "개인")]:
+            if label in m.index:
+                agg[key] = round(float(m.loc[label, ("거래대금", "순매수")]) / 1e8, 2)
+    except Exception as e:
+        logger.warning(f"ETF 시장 집계 실패: {e}")
+        agg = None
+
+    # 개별 ETF 루프 (get_etf_ticker_list가 이름 캐시 워밍 → get_etf_ticker_name 로컬)
+    tickers = stock.get_etf_ticker_list(todate)
+    rows = []
+    t0 = _time.time()
+    for i, t in enumerate(tickers):
+        if _time.time() - t0 > time_budget:
+            logger.warning(f"ETF 루프 time_budget({time_budget}s) 초과 — {i}/{len(tickers)}에서 중단")
+            break
+        try:
+            df = stock.get_etf_trading_volume_and_value(fromdate, todate, t)
+            if df is None or df.empty:
+                continue
+            inst = round(float(df.loc["기관합계", ("거래대금", "순매수")]) / 1e8, 2) if "기관합계" in df.index else None
+            fore = round(float(df.loc["외국인", ("거래대금", "순매수")]) / 1e8, 2) if "외국인" in df.index else None
+            rows.append({"티커": t, "종목명": stock.get_etf_ticker_name(t),
+                         "1주기관매매": inst, "1주외국인매매": fore})
+        except Exception:
+            continue
+        if (i + 1) % 200 == 0:
+            logger.info(f"ETF 수급 수집: {i + 1}/{len(tickers)}")
+
+    etf_flows = pd.DataFrame(rows) if rows else pd.DataFrame()
+    logger.info(f"KRX ETF 수급 수집 완료: {len(etf_flows)}개 ETF (거래대금 기준)")
+    return etf_flows, agg
+
+
+# ─────────────────────────────────────────
 # 메인 수집 함수
 # ─────────────────────────────────────────
 
@@ -1004,6 +1057,16 @@ def collect_all(config: dict, midweek: bool = False) -> dict:
         logger.warning(f"KRX 전종목 수급 실패({e}) → Naver 상위200 폴백")
         result["krx_flows"] = pd.DataFrame()
         result["flow_source"] = "naver"
+
+    # ── 5.6 KRX ETF 수급 (시장 집계 + 개별 ETF, best-effort) ──
+    try:
+        etf_flows, etf_agg = crawl_krx_etf_flows(monday_str, base_str)
+        result["etf_flows"] = etf_flows
+        result["etf_market_agg"] = etf_agg
+    except Exception as e:
+        logger.warning(f"ETF 수급 수집 실패({e}) → ETF 섹션 생략")
+        result["etf_flows"] = pd.DataFrame()
+        result["etf_market_agg"] = None
 
     # ── 6. Naver 상위 200개 상세 데이터 (재무 + 투자자 + PBR/배당) ──
     for market_name in ["kospi", "kosdaq"]:
