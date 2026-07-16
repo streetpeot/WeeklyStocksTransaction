@@ -315,6 +315,19 @@ def process(raw: dict) -> dict:
             if "외국인순매수금액" in df.columns:
                 df = df.rename(columns={"외국인순매수금액": "1주외국인매매"})
 
+        # KRX 전종목 수급으로 대체 (소스 혼용 금지 — 스펙 §4.1)
+        krx_flows = raw.get("krx_flows", pd.DataFrame())
+        if not krx_flows.empty:
+            mkt_flows = krx_flows[krx_flows["시장"] == market.upper()]
+            if not mkt_flows.empty:
+                drop_cols = [c for c in df.columns if c in ("1주기관매매", "1주외국인매매")]
+                if drop_cols:
+                    df = df.drop(columns=drop_cols)
+                df = df.merge(
+                    mkt_flows[["티커", "1주기관매매", "1주외국인매매"]],
+                    on="티커", how="left",
+                )
+
         # 파생 컬럼 추가
         df = add_derived_columns(df)
         processed[market] = df
@@ -342,5 +355,6 @@ def process(raw: dict) -> dict:
     processed["biz_days"] = raw.get("biz_days", 5)
     processed["is_midweek"] = raw.get("is_midweek", False)
     processed["period_label"] = raw.get("period_label", "")
+    processed["flow_source"] = raw.get("flow_source", "naver")
 
     return processed
