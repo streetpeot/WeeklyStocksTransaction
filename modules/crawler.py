@@ -899,13 +899,13 @@ def crawl_krx_etf_flows(fromdate: str, todate: str, top_n: int = 120, time_budge
         agg = None
 
     # 개별 ETF 루프 — 거래대금 상위 top_n만 (KRX rate-limit[~200콜/세션] 회피)
-    stock.get_etf_ticker_list(todate)  # 이름 캐시 워밍 (get_etf_ticker_name 로컬화)
+    all_tickers = stock.get_etf_ticker_list(todate)  # 이름 캐시 워밍 + 랭킹 실패 시 폴백용
     try:
         pc = stock.get_etf_price_change_by_ticker(fromdate, todate)
         tickers = list(pc.sort_values("거래대금", ascending=False).head(top_n).index)
     except Exception as e:
         logger.warning(f"ETF 거래대금 랭킹 실패({e}) → 이름목록 상위 {top_n}")
-        tickers = stock.get_etf_ticker_list(todate)[:top_n]
+        tickers = all_tickers[:top_n]
     rows = []
     t0 = _time.time()
     for i, t in enumerate(tickers):

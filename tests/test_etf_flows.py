@@ -82,6 +82,19 @@ def test_crawl_etf_flows_limits_to_top_n_by_value():
     assert set(flows["티커"]) == {"A", "E"}
 
 
+def test_crawl_etf_flows_ranking_failure_falls_back_to_ticker_list():
+    def fake(fromdate, todate, *args):
+        if not args:
+            return _investor_df({"외국인": 1e8})
+        return _investor_df({"기관합계": 1e8, "외국인": 2e8})
+    with patch("pykrx.stock.get_etf_trading_volume_and_value", side_effect=fake), \
+         patch("pykrx.stock.get_etf_price_change_by_ticker", side_effect=Exception("rank fail")), \
+         patch("pykrx.stock.get_etf_ticker_list", return_value=["A", "B", "C", "D", "E"]), \
+         patch("pykrx.stock.get_etf_ticker_name", side_effect=lambda t: t):
+        flows, agg = crawler.crawl_krx_etf_flows("20260713", "20260716", top_n=2)
+    assert set(flows["티커"]) == {"A", "B"}   # 랭킹 실패 → 이름목록 상위 2 폴백
+
+
 def test_collect_all_wires_etf(monkeypatch):
     def fake_market(market_code, max_pages=None):
         return pd.DataFrame({"티커": ["005930"], "종목명": ["삼성전자"], "시가총액(억)": [100.0]})
