@@ -2,7 +2,7 @@
 
 공유용 보고서와의 문맥 격리(스펙 §4.4): 이 모듈은 LLM을 호출하지 않고,
 워치리스트 데이터는 reporter의 프롬프트에 진입하지 않는다.
-개인용 = 공유용 본문(바이트 동일) + 결정적 테이블 섹션 append.
+공유용 파일은 무변형(개인용은 본문 재사용 후 섹션 append) — 원본을 직접 수정하지 않는다.
 """
 import logging
 import re
@@ -72,6 +72,7 @@ def build_watchlist_section(wl: pd.DataFrame, processed: dict, db) -> str:
     )
     if combined.empty:
         return "\n".join(lines + ["| (데이터 없음) | | | | | | | |"]) + "\n"
+    combined = combined.drop_duplicates(subset="티커", keep="first")
     combined = combined.set_index("티커")
 
     for _, w in wl.iterrows():
@@ -110,6 +111,9 @@ def generate_personal_report(report_path: str, processed: dict, db, config: dict
 
     prefix = config.get("output", {}).get("report_prefix", "주가자금동향")
     dest = src.with_name(src.name.replace(f"{prefix}_", f"{prefix}_개인_", 1))
+    if dest == src:
+        logger.warning(f"개인용 파일명 유도 실패(prefix 불일치: {src.name}) — 개인용 생략")
+        return None
     dest.write_text(text, encoding="utf-8")
     logger.info(f"개인용 보고서 저장: {dest} (워치리스트 {len(wl)}종목)")
     return str(dest)

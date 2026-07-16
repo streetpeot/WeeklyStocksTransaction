@@ -90,3 +90,33 @@ def test_generate_personal_report_no_watchlist(tmp_path):
     config = {"publish": {"watchlist_path": str(tmp_path / "없음.md")},
               "output": {"report_prefix": "주가자금동향"}}
     assert watchlist.generate_personal_report(str(report), _processed(), _db(), config) is None
+
+
+def test_generate_personal_report_prefix_mismatch_does_not_overwrite(tmp_path):
+    """dest 파일명이 prefix 삽입 실패로 src와 동일해지면 공유용 파일을 덮어쓰지 말고 None."""
+    wl_path = tmp_path / "워치리스트.md"
+    wl_path.write_text(WL_MD, encoding="utf-8")
+    report = tmp_path / "weekly_report_20260717.md"
+    original = "---\ntitle: x\n---\n본문"
+    report.write_text(original, encoding="utf-8")
+    config = {"publish": {"watchlist_path": str(wl_path)},
+              "output": {"report_prefix": "주가자금동향"}}
+
+    out = watchlist.generate_personal_report(str(report), _processed(), _db(), config)
+
+    assert out is None
+    assert report.read_text(encoding="utf-8") == original   # 공유용 원본 불변
+
+
+def test_build_section_handles_duplicate_ticker_across_markets():
+    """같은 티커가 kospi/kosdaq 양쪽에 있어도 예외 없이 처리 (해당 티커 행 1개)."""
+    processed = _processed()
+    processed["kosdaq"] = pd.DataFrame({
+        "티커": ["005930"], "종목명": ["삼성전자"], "시가총액": [4000000.0],
+        "1주등락률": [1.2], "1주기관매매": [1.5], "1주외국인매매": [-2.0],
+        "시장": ["KOSPI"],
+    })
+    wl = pd.DataFrame({"티커": ["005930"], "종목명": ["삼성전자"], "구분": ["보유"]})
+    md = watchlist.build_watchlist_section(wl, processed, _db())
+    assert md.startswith("## 워치리스트 수급")
+    assert md.count("삼성전자") == 1
