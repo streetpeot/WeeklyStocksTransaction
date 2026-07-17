@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS weekly_stock (
     ticker         TEXT,
     inst_net_1w    REAL,
     foreign_net_1w REAL,
+    flow_source    TEXT,
     PRIMARY KEY (week_date, market, ticker)
 );
 """
@@ -95,7 +96,16 @@ class Database:
             conn.execute(DDL_WEEKLY_CAP_WEIGHT)
             conn.execute(DDL_WEEKLY_SECTOR)
             conn.execute(DDL_WEEKLY_STOCK)
+            self._migrate_flow_source(conn)
         logger.info(f"DB 초기화 완료: {self.db_path}")
+
+    def _migrate_flow_source(self, conn: sqlite3.Connection):
+        """기존 DB에 flow_source 컬럼 추가 + 과거 행은 'naver' 소급 (스펙 §4.6)"""
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(weekly_stock)")]
+        if "flow_source" not in cols:
+            conn.execute("ALTER TABLE weekly_stock ADD COLUMN flow_source TEXT")
+            logger.info("weekly_stock: flow_source 컬럼 추가")
+        conn.execute("UPDATE weekly_stock SET flow_source='naver' WHERE flow_source IS NULL")
 
     # ─────────────────────────────────────
     # UPSERT
@@ -213,6 +223,7 @@ class Database:
 
     def _upsert_stock(self, conn: sqlite3.Connection, week_date: str, processed: dict):
         """per-stock 기관/외국인 1주 매매 데이터 저장 (데이터 있는 종목만)"""
+        flow_source = processed.get("flow_source", "naver")
         for market in ["KOSPI", "KOSDAQ"]:
             df = processed.get(market.lower(), pd.DataFrame())
             if df.empty:
@@ -230,10 +241,32 @@ class Database:
                 conn.execute(
                     """
                     INSERT OR REPLACE INTO weekly_stock
-                    (week_date, market, ticker, inst_net_1w, foreign_net_1w)
-                    VALUES (?, ?, ?, ?, ?)
+                    (week_date, market, ticker, inst_net_1w, foreign_net_1w, flow_source)
+                    VALUES (?, ?, ?, ?, ?, ?)
                     """,
-                    (week_date, market, ticker, inst_val, fore_val),
+                    (week_date, market, ticker, inst_val, fore_val, flow_source),
+                )
+
+        # ETF 수급 (market="ETF") — 기존 KOSPI/KOSDAQ 조회는 market 필터라 무해
+        etf = processed.get("etf_flows", pd.DataFrame())
+        if isinstance(etf, pd.DataFrame) and not etf.empty:
+            for _, row in etf.iterrows():
+                ticker = row.get("티커")
+                if not ticker:
+                    continue
+                inst = row.get("1주기관매매")
+                fore = row.get("1주외국인매매")
+                inst_val = float(inst) if inst is not None and pd.notna(inst) else None
+                fore_val = float(fore) if fore is not None and pd.notna(fore) else None
+                if inst_val is None and fore_val is None:
+                    continue
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO weekly_stock
+                    (week_date, market, ticker, inst_net_1w, foreign_net_1w, flow_source)
+                    VALUES (?, 'ETF', ?, ?, ?, ?)
+                    """,
+                    (week_date, ticker, inst_val, fore_val, flow_source),
                 )
 
     def _trim_old_weeks(self, conn: sqlite3.Connection, table: str, max_weeks: int):
@@ -401,6 +434,22 @@ class Database:
                 params=[market] + week_dates,
             )
         return df
+
+    def get_stock_flow_history(self, ticker: str, market: str, n_weeks: int = 4) -> pd.DataFrame:
+        """종목 하나의 최근 n_weeks 주간 기관/외국인 순매수 이력 (오름차순).
+        Returns: DataFrame [week_date, inst_net_1w, foreign_net_1w]
+        """
+        with self._connect() as conn:
+            df = pd.read_sql_query(
+                """
+                SELECT week_date, inst_net_1w, foreign_net_1w
+                FROM weekly_stock
+                WHERE ticker = ? AND market = ?
+                ORDER BY week_date DESC LIMIT ?
+                """,
+                conn, params=(ticker, market, n_weeks),
+            )
+        return df.sort_values("week_date").reset_index(drop=True)
 
 
 # ─────────────────────────────────────────

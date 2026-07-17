@@ -56,16 +56,21 @@ def _base_date_from(report_path: Path) -> str:
     return m.group(1)
 
 
-def publish(config: dict, report_path, *, to_dm: bool = False, dry_run: bool = False) -> list[str]:
+def publish(config: dict, report_path, *, personal_path=None, to_dm: bool = False,
+            dry_run: bool = False) -> list[str]:
     """발행 파이프라인 오케스트레이션: 볼트 반입 → PDF 변환 → 텔레그램 전송.
+
+    라우팅: 볼트·DM=개인용(없으면 볼트는 공유용), 채널=공유용.
 
     파이프라인 단계 실패는 반환 리스트로 보고하지만, report_path 파일명이
     `_YYYYMMDD.md` 패턴이 아니면 ValueError를 raise한다 (호출자[main.py 훅]이 감쌀 것).
 
     Args:
         config: 설정 딕셔너리 (publish·output 키 필수)
-        report_path: 보고서 markdown 파일 경로
-        to_dm: True면 telegram_channel 대신 notify_chat_id로 전송
+        report_path: 보고서 markdown 파일 경로 (공유용 — name 계산 기준)
+        personal_path: 개인용(워치리스트 포함) 보고서 경로. 있으면 볼트 반입 대상과
+            DM 전송 대상이 개인용으로 바뀐다. None이면 현행과 동일(볼트=공유용, DM 없음).
+        to_dm: True면 telegram_channel 대신 notify_chat_id로 전송 (공유용 PDF 리허설)
         dry_run: True면 파이프라인 스킵
 
     Returns:
@@ -80,16 +85,17 @@ def publish(config: dict, report_path, *, to_dm: bool = False, dry_run: bool = F
     base_date = _base_date_from(report_path)
     name = dest_name_for(base_date, pub.get("title_prefix", "국내증시 자금동향"))
     chart_glob = str(Path(config["output"].get("chart_dir", "./data/charts")) / f"*_{base_date}.png")
+    ingest_src = Path(personal_path) if personal_path else report_path
 
     if dry_run:
         logger.info(f"[dry-run] dest={name}, charts={chart_glob}")
         return []
 
-    # ① 볼트 반입 (독립 — 실패해도 계속)
+    # ① 볼트 반입 (독립 — 실패해도 계속) — 개인용 우선, 없으면 공유용
     try:
         r = subprocess.run(
             [sys.executable, pub["vault_ingest"],
-             "--doc-type", "수급동향", "--file", str(report_path),
+             "--doc-type", "수급동향", "--file", str(ingest_src),
              "--dest-name", name, "--assets", chart_glob],
             capture_output=True, text=True, timeout=600)
         if r.returncode == 2 and "반입 완료" in r.stdout:
@@ -99,7 +105,7 @@ def publish(config: dict, report_path, *, to_dm: bool = False, dry_run: bool = F
     except Exception as e:
         errors.append(f"볼트 반입 실행 실패: {e}")
 
-    # ② PDF → ③ 전송 (PDF 실패 시 전송만 스킵)
+    # ② PDF → ③ 전송 (PDF 실패 시 전송만 스킵) — 채널은 항상 공유용
     if pub.get("pdf_enabled", True):
         try:
             pdf = pdf_export.md_to_pdf(report_path, report_path.parent / "pdf" / f"{name}.pdf")
@@ -110,6 +116,17 @@ def publish(config: dict, report_path, *, to_dm: bool = False, dry_run: bool = F
                 errors.append(f"전송 실패: {e}")
         except Exception as e:
             errors.append(f"PDF 변환 실패: {e}")
+
+        # 개인용 → DM (워치리스트 포함본, 있을 때만 — 다른 단계와 독립)
+        if personal_path:
+            try:
+                pdf_p = pdf_export.md_to_pdf(
+                    Path(personal_path),
+                    report_path.parent / "pdf" / f"{name}_개인.pdf")
+                notifier.send_document(pub["notify_chat_id"], pdf_p,
+                                       caption=f"{name} · 워치리스트")
+            except Exception as e:
+                errors.append(f"개인용 DM 전송 실패: {e}")
     else:
         logger.info("pdf_enabled=false — PDF 변환·전송 생략")
 
