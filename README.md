@@ -22,7 +22,9 @@
 
 - **전종목 수집**: KOSPI 2,404개 + KOSDAQ 1,820개 시총/주가/PER/ROE/외국인비율
 - **기간별 등락률**: 1주/1개월/3개월/6개월 (비동기 수집, 약 9초)
-- **투자자 수급**: 기관·외국인 순매수(상위 200종목), PBR, 배당수익률, 연간 재무
+- **투자자 수급**: 기관·외국인 순매수 **전종목**(KRX 일괄수집, 실패 시 네이버 상위200 폴백). PBR·배당수익률·연간 재무는 상위 200종목
+- **ETF 수급**: 거래대금 상위 120 ETF + 시장 전체 집계 → 보고서 별도 「ETF 수급」 섹션
+- **개인/공유 이중 보고서**: 공유용(채널)에 더해, 개인용(볼트·DM)에 워치리스트 종목 수급 섹션 추가
 - **DB 누적 이력**: SQLite에 52주치 이력 자동 관리 → 다기간 수급 누적 컬럼 자동 활성화
 - **Excel 5탭 출력**: 코스피 / 코스닥 / 증시정보 / 코스피시총비중 / 코스닥시총비중
 - **차트 6종 PNG**: 시총비중 추이 × 2, 투자자 수급 추이 × 2, 섹터별 수급 × 2
@@ -33,7 +35,7 @@
 | 항목 | 내용 |
 |------|------|
 | Python | 3.11+ |
-| 데이터 수집 | 네이버금융 크롤링, fchart 비공식 API, KIS REST API |
+| 데이터 수집 | 네이버금융 크롤링, fchart 비공식 API, KIS REST API, KRX(pykrx≥1.2.8, 키체인 로그인) |
 | 비동기 | aiohttp + asyncio (fchart 4,224개 종목 동시 수집) |
 | DB | SQLite (4개 테이블, 52주 이력) |
 | AI | Anthropic Claude API (claude-sonnet-4-6) |
@@ -42,13 +44,13 @@
 ### 파이프라인 구조
 
 ```
-[1] crawler.py      네이버금융 + fchart + KIS API → raw 데이터
+[1] crawler.py      네이버금융 + fchart + KIS + KRX(전종목·ETF 수급) → raw 데이터
 [2] processor.py    파생 컬럼 + 시총비중 + 섹터 집계
 [3] database.py     SQLite UPSERT → DB 이력 기반 다기간 누적 보강
 [4] exporter.py     Excel 5탭 저장
 [5] visualizer.py   차트 PNG 6종
-[6] reporter.py     Claude API 3회 분할 호출 → Markdown 보고서
-[7] publisher.py    볼트 반입 + PDF + 텔레그램
+[6] reporter.py     Claude API 3회 분할 호출 + ETF 수급 섹션 결정적 삽입 → Markdown 보고서
+[7] publisher.py    볼트 반입 + PDF + 텔레그램 (공유용=채널 / 개인용=볼트·DM, 워치리스트 섹션)
 ```
 
 ---
@@ -60,6 +62,7 @@
 - macOS (AppleGothic 한글 폰트 필요)
 - Python 3.11+
 - KIS (한국투자증권) Developers API Key
+- KRX (한국거래소) 로그인 계정 — 전종목·ETF 수급 수집용(키체인 `krx-data`, 미설정 시 네이버 상위200 폴백)
 - Anthropic API Key
 
 ### 설치
@@ -115,6 +118,7 @@ publish:
   pdf_enabled: true                    # true면 보고서를 PDF로 변환해 채널 전송
   telegram_channel: "-100XXXXXXXXXX"   # PDF를 보낼 텔레그램 채널 chat_id
   notify_chat_id: "XXXXXXXXX"          # 실패 시 경고 DM을 받을 chat_id
+  watchlist_path: "/path/to/obsidian-vault/wiki/topics/개인/워치리스트.md"  # 개인용 워치리스트(6자리 티커 표); 비우면 공유용만 발행
 ```
 
 ### KIS API 발급
@@ -122,6 +126,14 @@ publish:
 1. [한국투자증권 Developers](https://apiportal.koreainvestment.com) 가입
 2. 앱 등록 → `app_key`, `app_secret` 발급
 3. 모의투자 또는 실전 계좌번호 확인
+
+### KRX 로그인 (키체인)
+
+전종목·ETF 투자자 수급은 KRX 데이터(pykrx≥1.2.8)에서 수집한다. KRX는 익명 접근을 차단하므로 로그인이 필요하며, 계정은 `config.yaml`이 아닌 macOS 키체인에서 읽는다(평문 시크릿 금지). 미설정 시 자동으로 네이버 상위200 수급으로 폴백한다. rate-limit이 세션당 ~200콜이라 ETF는 거래대금 상위 120개만 수집한다.
+
+```bash
+security add-generic-password -s krx-data -a "<KRX_ID>" -w "<KRX_PW>"
+```
 
 ### 텔레그램 봇 토큰 (키체인)
 
