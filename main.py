@@ -121,15 +121,16 @@ def run_pipeline(config: dict, midweek: bool = False):
     logger.info("[1/6] 데이터 수집 (KIS + KRX + 네이버금융)...")
     raw = crawler.collect_all(config, midweek=midweek)
 
-    # KRX 폴백 시 DM 경고 (스펙 §4.1)
+    # KRX 폴백 시 DM 경고 (스펙 §4.1) — private-pdf 모드는 텔레그램 발송 전면 금지
     if raw.get("flow_source") == "naver" and config.get("publish"):
-        try:
-            from modules import notifier
-            notifier.send_message(
-                config["publish"]["notify_chat_id"],
-                "⚠️ WST: KRX 전종목 수급 실패 — Naver 상위200 폴백으로 진행")
-        except Exception:
-            logger.exception("KRX 폴백 통지 실패 (무시)")
+        if "--private-pdf" not in sys.argv:
+            try:
+                from modules import notifier
+                notifier.send_message(
+                    config["publish"]["notify_chat_id"],
+                    "⚠️ WST: KRX 전종목 수급 실패 — Naver 상위200 폴백으로 진행")
+            except Exception:
+                logger.exception("KRX 폴백 통지 실패 (무시)")
 
     # [2] 데이터 가공
     logger.info("[2/6] 데이터 가공 (파생 컬럼 + 섹터 집계)...")
