@@ -13,6 +13,8 @@ from modules import notifier, pdf_export
 
 logger = logging.getLogger(__name__)
 
+SENTINEL_PATH = Path(__file__).resolve().parent.parent / "data" / "last_private_pdf.txt"
+
 
 def _krx_trading_days(start: str, end: str) -> list[str]:
     """KRX 캘린더 기준 거래일 목록(YYYYMMDD). 네트워크 실패 시 예외 전파."""
@@ -57,7 +59,7 @@ def _base_date_from(report_path: Path) -> str:
 
 
 def publish(config: dict, report_path, *, personal_path=None, to_dm: bool = False,
-            dry_run: bool = False) -> list[str]:
+            dry_run: bool = False, private_pdf: bool = False) -> list[str]:
     """발행 파이프라인 오케스트레이션: 볼트 반입 → PDF 변환 → 텔레그램 전송.
 
     라우팅: 볼트·DM=개인용(없으면 볼트는 공유용), 채널=공유용.
@@ -72,6 +74,8 @@ def publish(config: dict, report_path, *, personal_path=None, to_dm: bool = Fals
             DM 전송 대상이 개인용으로 바뀐다. None이면 현행과 동일(볼트=공유용, DM 없음).
         to_dm: True면 telegram_channel 대신 notify_chat_id로 전송 (공유용 PDF 리허설)
         dry_run: True면 파이프라인 스킵
+        private_pdf: True면 볼트 반입 후 PDF만 생성하고 텔레그램 전송은 전부 스킵,
+            PDF 절대경로를 SENTINEL_PATH(<repo>/data/last_private_pdf.txt)에 기록한다.
 
     Returns:
         에러 메시지 리스트 (성공 시 빈 리스트)
@@ -106,6 +110,17 @@ def publish(config: dict, report_path, *, personal_path=None, to_dm: bool = Fals
         errors.append(f"볼트 반입 실행 실패: {e}")
 
     # ② PDF → ③ 전송 (PDF 실패 시 전송만 스킵) — 채널은 항상 공유용
+    if private_pdf:
+        # 비공개 PDF 모드: 볼트 반입은 위에서 이미 수행, 전송은 전부 스킵, PDF만 생성.
+        src = Path(personal_path) if personal_path else report_path  # 개인용(워치리스트 포함) 우선
+        try:
+            pdf = pdf_export.md_to_pdf(src, report_path.parent / "pdf" / f"{name}_개인.pdf")
+            SENTINEL_PATH.parent.mkdir(parents=True, exist_ok=True)
+            SENTINEL_PATH.write_text(str(pdf), encoding="utf-8")
+        except Exception as e:
+            errors.append(f"비공개 PDF 생성 실패: {e}")
+        return errors
+
     if pub.get("pdf_enabled", True):
         try:
             pdf = pdf_export.md_to_pdf(report_path, report_path.parent / "pdf" / f"{name}.pdf")

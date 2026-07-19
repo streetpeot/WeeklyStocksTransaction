@@ -221,6 +221,47 @@ def test_publish_pdf_disabled_skips_pdf_and_send(tmp_path):
     pdf.assert_not_called(); send.assert_not_called(); dm.assert_not_called()
 
 
+def test_publish_private_pdf_skips_send_and_writes_sentinel(tmp_path, monkeypatch):
+    from modules import publisher
+
+    # 리포트 md (파일명은 _YYYYMMDD.md 패턴 필수)
+    report = tmp_path / "국내증시 자금동향_20260719.md"
+    report.write_text("---\ntitle: x\n---\n# 본문\n", encoding="utf-8")
+
+    config = {
+        "publish": {
+            "vault_ingest": "/ignored",
+            "notify_chat_id": "988006216",
+            "telegram_channel": "@somechannel",
+            "pdf_enabled": True,
+        },
+        "output": {"chart_dir": str(tmp_path / "charts")},
+    }
+
+    # 볼트 반입 subprocess는 성공으로 mock (실제 vault_ingest 실행 안 함)
+    from types import SimpleNamespace
+    monkeypatch.setattr(publisher.subprocess, "run",
+                        lambda *a, **k: SimpleNamespace(returncode=0, stdout="반입 완료", stderr=""))
+
+    fake_pdf = tmp_path / "pdf" / "out.pdf"
+    fake_pdf.parent.mkdir(parents=True, exist_ok=True)
+    fake_pdf.write_bytes(b"%PDF-fake")
+    monkeypatch.setattr(publisher.pdf_export, "md_to_pdf", lambda md, out: fake_pdf)
+
+    sent = []
+    monkeypatch.setattr(publisher.notifier, "send_document",
+                        lambda *a, **k: sent.append(a))
+
+    sentinel = tmp_path / "data" / "last_private_pdf.txt"
+    monkeypatch.setattr(publisher, "SENTINEL_PATH", sentinel)
+
+    errors = publisher.publish(config, report, private_pdf=True)
+
+    assert sent == []                                   # 전송 스킵
+    assert sentinel.read_text(encoding="utf-8").strip() == str(fake_pdf)
+    assert errors == []
+
+
 def test_publish_pdf_disabled_skips_personal_dm_too(tmp_path):
     """pdf_enabled=False면 personal_path가 있어도 개인용 DM 전송을 생략한다."""
     md = _setup_report(tmp_path)

@@ -195,7 +195,8 @@ def run_pipeline(config: dict, midweek: bool = False):
     if config.get("publish") and not midweek:
         try:
             from modules import publisher
-            publisher.publish(config, report_path, personal_path=personal_path)
+            publisher.publish(config, report_path, personal_path=personal_path,
+                              private_pdf=("--private-pdf" in sys.argv))
         except Exception:
             logging.exception("발행 단계 예외 (파이프라인은 계속)")
     elif midweek and config.get("publish"):
