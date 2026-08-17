@@ -84,7 +84,34 @@ def _enrich_from_db(db, week_date: str, processed: dict) -> dict:
             df = df.merge(acc[["티커", inst_col, fore_col]], on="티커", how="left")
         processed[market.lower()] = df
 
+    # ── ETF 4주 추이 ──
+    # 이미 weekly_stock(market='ETF')에 쌓인 이력만 쓴다 — KRX를 다시 부르지 않는다.
+    etf = processed.get("etf_flows", pd.DataFrame())
+    if isinstance(etf, pd.DataFrame) and not etf.empty:
+        processed["etf_flows"] = _enrich_etf_trend(db, etf, n_weeks=4)
+
     return processed
+
+
+def _enrich_etf_trend(db, etf_flows: pd.DataFrame, n_weeks: int = 4) -> pd.DataFrame:
+    """ETF별 주간 순매수 추이(오래된 주 → 최신 주)를 리스트 컬럼으로 붙인다.
+
+    렌더러(markdown·Excel)가 DB를 몰라도 되게 여기서 끝낸다. 이력에 없는 ETF는 빈 리스트를
+    받는다 — 첫 주에도 섹션이 깨지지 않게 하려는 것이다.
+    """
+    history = db.get_etf_flow_history(n_weeks=n_weeks)
+    inst_by_ticker: dict[str, list] = {}
+    fore_by_ticker: dict[str, list] = {}
+    if not history.empty:
+        for ticker, group in history.sort_values("week_date").groupby("ticker"):
+            inst_by_ticker[ticker] = list(group["inst_net_1w"])
+            fore_by_ticker[ticker] = list(group["foreign_net_1w"])
+
+    out = etf_flows.copy()
+    tickers = out["티커"].astype(str)
+    out["기관4주추이"] = [inst_by_ticker.get(t, []) for t in tickers]
+    out["외국인4주추이"] = [fore_by_ticker.get(t, []) for t in tickers]
+    return out
 
 
 def load_config(path: str = "config.yaml") -> dict:

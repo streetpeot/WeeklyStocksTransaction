@@ -26,13 +26,35 @@ def _name(r) -> str:
     return nm if (nm is not None and pd.notna(nm)) else str(r.get("티커", ""))
 
 
+TREND_COL = {"1주기관매매": "기관4주추이", "1주외국인매매": "외국인4주추이"}
+
+
+def format_trend(values) -> str:
+    """주간 값 나열: 오래된 → 최신. 예: '+100.0 → +200.0 → +300.0'.
+
+    watchlist 섹션과 같은 표기다 — 두 표를 나란히 읽을 때 눈이 다시 적응하지 않게.
+    """
+    if values is None or not isinstance(values, (list, tuple)) or len(values) == 0:
+        return "-"
+    return " → ".join(_fmt(v) for v in values)
+
+
 def _direction_table(flows: pd.DataFrame, sort_col: str, ascending: bool, show_cols: list, n: int) -> list:
     sub = flows.dropna(subset=[sort_col]).sort_values(sort_col, ascending=ascending).head(n)
-    header = "| ETF | " + " | ".join(f"{_LABEL[c]}(억)" for c in show_cols) + " |"
-    sep = "|---|" + "|".join(["---"] * len(show_cols)) + "|"
+    # 추이 컬럼은 DB 이력이 쌓인 뒤에만 붙는다(첫 주에는 없다). 있을 때만 열을 늘린다.
+    trend_cols = [TREND_COL[c] for c in show_cols if TREND_COL[c] in flows.columns]
+    header = (
+        "| ETF | "
+        + " | ".join(f"{_LABEL[c]}(억)" for c in show_cols)
+        + ("".join(f" | {_LABEL[c]} 4주 추이" for c in show_cols if TREND_COL[c] in flows.columns))
+        + " |"
+    )
+    sep = "|---|" + "|".join(["---"] * (len(show_cols) + len(trend_cols))) + "|"
     lines = [header, sep]
     for _, r in sub.iterrows():
         cells = " | ".join(_fmt(r.get(c)) for c in show_cols)
+        if trend_cols:
+            cells += " | " + " | ".join(format_trend(r.get(t)) for t in trend_cols)
         lines.append(f"| {_name(r)} | {cells} |")
     return lines
 

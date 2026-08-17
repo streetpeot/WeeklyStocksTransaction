@@ -181,6 +181,52 @@ def _write_market_sheet(ws, processed: dict):
         ws.column_dimensions[get_column_letter(i)].width = w
 
 
+def _write_etf_sheet(ws, etf_df, title_suffix: str = ""):
+    """ETF 수급 탭. 4주 추이는 markdown 섹션과 같은 표기로 문자열 한 칸에 담는다."""
+    from modules.etf_section import format_trend
+
+    title = f"ETF 수급 ({title_suffix})" if title_suffix else "ETF 수급"
+    ws["A1"] = title
+    ws["A1"].font = Font(bold=True, size=13)
+    ws.merge_cells("A1:F1")
+    ws["A1"].alignment = Alignment(horizontal="center")
+
+    if etf_df is None or not isinstance(etf_df, pd.DataFrame) or etf_df.empty:
+        ws["A2"] = "ETF 수급 데이터 없음"
+        return
+
+    has_trend = "기관4주추이" in etf_df.columns and "외국인4주추이" in etf_df.columns
+    headers = ["티커", "종목명", "기관(억)", "외국인(억)"]
+    if has_trend:
+        headers += ["기관 4주 추이", "외국인 4주 추이"]
+    for col_idx, header in enumerate(headers, 1):
+        cell = ws.cell(row=2, column=col_idx, value=header)
+        cell.font = SUBHEADER_FONT
+        cell.fill = SUBHEADER_FILL
+        cell.alignment = Alignment(horizontal="center")
+        cell.border = THIN_BORDER
+
+    # 기관 순매수 큰 순 — markdown 섹션의 '기관 순매수 상위'와 같은 기준으로 읽히게 한다.
+    ordered = etf_df.sort_values("1주기관매매", ascending=False, na_position="last")
+    for row_idx, (_, row) in enumerate(ordered.iterrows(), 3):
+        values = [
+            row.get("티커"),
+            row.get("종목명"),
+            row.get("1주기관매매"),
+            row.get("1주외국인매매"),
+        ]
+        if has_trend:
+            values += [format_trend(row.get("기관4주추이")), format_trend(row.get("외국인4주추이"))]
+        for col_idx, value in enumerate(values, 1):
+            cell = ws.cell(row=row_idx, column=col_idx, value=value)
+            cell.border = THIN_BORDER
+            if col_idx in (3, 4) and value is not None:
+                cell.number_format = NUM_FORMAT_COMMA2
+
+    for column, width in zip("ABCDEF", (10, 26, 14, 14, 30, 30)):
+        ws.column_dimensions[column].width = width
+
+
 def _write_cap_weight_sheet(ws, cap_df: pd.DataFrame, market: str):
     """시가 구간별 비중 탭 작성"""
     title = f"{market} 시가총액 구간별 비중"
@@ -266,6 +312,10 @@ def save_excel(processed: dict, config: dict) -> str:
     ws_kosdaq_cap = wb.create_sheet("코스닥 시총비중")
     cap_kosdaq = processed.get("kosdaq_cap_weight", pd.DataFrame())
     _write_cap_weight_sheet(ws_kosdaq_cap, cap_kosdaq, "KOSDAQ")
+
+    # 탭 6: ETF 수급
+    ws_etf = wb.create_sheet("ETF")
+    _write_etf_sheet(ws_etf, processed.get("etf_flows"), title_suffix)
 
     wb.save(filepath)
     logger.info(f"Excel 저장 완료: {filepath}")
