@@ -435,6 +435,29 @@ class Database:
             )
         return df
 
+    def get_etf_flow_history(self, n_weeks: int = 4) -> pd.DataFrame:
+        """최근 n_weeks 주의 **전** ETF 기관/외국인 순매수 이력 (주 오름차순).
+
+        ETF는 100종목대라 get_stock_flow_history를 종목마다 부르면 쿼리가 그만큼 늘어난다.
+        최근 주차 집합을 먼저 잡고 한 번에 읽는다.
+
+        Returns: DataFrame [ticker, week_date, inst_net_1w, foreign_net_1w]
+        """
+        with self._connect() as conn:
+            df = pd.read_sql_query(
+                """
+                SELECT ticker, week_date, inst_net_1w, foreign_net_1w
+                FROM weekly_stock
+                WHERE market = 'ETF' AND week_date IN (
+                    SELECT week_date FROM weekly_stock WHERE market = 'ETF'
+                    GROUP BY week_date ORDER BY week_date DESC LIMIT ?
+                )
+                ORDER BY ticker, week_date
+                """,
+                conn, params=(n_weeks,),
+            )
+        return df
+
     def get_stock_flow_history(self, ticker: str, market: str, n_weeks: int = 4) -> pd.DataFrame:
         """종목 하나의 최근 n_weeks 주간 기관/외국인 순매수 이력 (오름차순).
         Returns: DataFrame [week_date, inst_net_1w, foreign_net_1w]
