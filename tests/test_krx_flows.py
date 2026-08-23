@@ -85,7 +85,6 @@ def test_collect_all_falls_back_to_naver_on_krx_failure():
     with (
         patch("modules.crawler.crawl_naver_market", return_value=_minimal_market_df()),
         patch("modules.crawler.build_sector_map", return_value={}),
-        patch("modules.crawler.collect_kis_investor_rank", return_value={}),
         patch("modules.crawler.collect_kis_market_info", return_value={}),
         patch("modules.crawler.crawl_period_returns_all", return_value=pd.DataFrame()),
         patch("modules.crawler.crawl_naver_stock_details", return_value=pd.DataFrame()),
@@ -111,7 +110,6 @@ def test_collect_all_uses_krx_on_success():
     with (
         patch("modules.crawler.crawl_naver_market", return_value=_minimal_market_df()),
         patch("modules.crawler.build_sector_map", return_value={}),
-        patch("modules.crawler.collect_kis_investor_rank", return_value={}),
         patch("modules.crawler.collect_kis_market_info", return_value={}),
         patch("modules.crawler.crawl_period_returns_all", return_value=pd.DataFrame()),
         patch("modules.crawler.crawl_naver_stock_details", return_value=pd.DataFrame()),

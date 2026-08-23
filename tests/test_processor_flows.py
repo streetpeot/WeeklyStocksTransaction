@@ -16,7 +16,7 @@ def _raw(krx_flows, flow_source):
     })
     return {
         "kospi": kospi, "kosdaq": pd.DataFrame(),
-        "investor_ranks": {}, "market_info": {},
+        "market_info": {},
         "base_date": "20260717", "krx_flows": krx_flows, "flow_source": flow_source,
     }
 

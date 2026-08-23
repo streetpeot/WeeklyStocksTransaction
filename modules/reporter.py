@@ -112,13 +112,11 @@ def _build_data_context(processed: dict, chart_paths: dict, rotation_data: dict)
         avail_str(avail_3m, "3개월 기관/외국인 매매 누적", 12, n_stock_weeks),
     ])
 
-    # 지수 / 투자자 정보
+    # 지수 정보 (시장 수급은 종목별 테이블·섹터 집계가 원천 — SJAIINV-50)
     market_info = processed.get("market_info", {})
-    investor_ranks = processed.get("investor_ranks", {})
 
     def get_index_summary(market: str) -> str:
         idx = market_info.get(f"{market}_index", {})
-        inv_df = investor_ranks.get(market, pd.DataFrame())
         lines = [f"**{market}**"]
         if idx:
             close = idx.get("종가")
@@ -134,11 +132,6 @@ def _build_data_context(processed: dict, chart_paths: dict, rotation_data: dict)
                 lines.append(f"- 주간등락: 미산출 (현재 {n_weeks}주 누적, 2주 필요)")
             if daily_pt and daily_pct:
                 lines.append(f"- 일간등락: {daily_pt:+.2f}p ({daily_pct:+.2f}%)")
-        if not inv_df.empty:
-            if "기관순매수금액" in inv_df.columns:
-                lines.append(f"- 기관 Top30 순매수 합: {inv_df['기관순매수금액'].sum():+,.0f}억")
-            if "외국인순매수금액" in inv_df.columns:
-                lines.append(f"- 외국인 Top30 순매수 합: {inv_df['외국인순매수금액'].sum():+,.0f}억")
         return "\n".join(lines)
 
     market_summary = get_index_summary("KOSPI") + "\n\n" + get_index_summary("KOSDAQ")

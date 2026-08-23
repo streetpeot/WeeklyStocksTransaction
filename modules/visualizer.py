@@ -118,8 +118,10 @@ def _plot_investor_flow(market_history: pd.DataFrame, stock_flow_history: pd.Dat
     """투자자별 주간 자금 추이 Bar 차트.
 
     데이터 소스 우선순위:
-      1) weekly_market.weekly_foreign_net/inst_net (KIS API 기반, 현재 빈 응답으로 None)
-      2) weekly_stock의 종목별 매매 주별 합산 (Top 200 기준 fallback)
+      1) weekly_market.weekly_foreign_net/inst_net — 과거 KIS 기반 컬럼, 전 구간 NULL.
+         KIS 수집은 SJAIINV-50 으로 제거됐고 컬럼은 스키마 호환용으로만 남아 있어
+         아래 all-null 검사가 항상 2)를 선택한다.
+      2) weekly_stock의 종목별 매매 주별 합산 (KRX 전종목; 폴백 시 상위 200 근사)
     개인(individual)은 시장 전체 데이터가 없어 표시 생략.
     """
     import numpy as np

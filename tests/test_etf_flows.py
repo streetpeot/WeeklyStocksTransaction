@@ -103,7 +103,6 @@ def test_collect_all_wires_etf(monkeypatch):
                               "1주기관매매": [-100.0], "1주외국인매매": [50.0]})
     with patch("modules.crawler.crawl_naver_market", side_effect=fake_market), \
          patch("modules.crawler.build_sector_map", return_value={}), \
-         patch("modules.crawler.collect_kis_investor_rank", return_value={}), \
          patch("modules.crawler.collect_kis_market_info", return_value={}), \
          patch("modules.crawler.crawl_period_returns_all", return_value=pd.DataFrame()), \
          patch("modules.crawler.crawl_naver_stock_details", return_value=pd.DataFrame()), \

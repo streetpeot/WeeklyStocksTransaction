@@ -112,49 +112,6 @@ class KISClient:
                          params=params, timeout=15)
         return r.json()
 
-    # ── 기관/외국인 순매수 상위 ──
-    def get_investor_rank(self, market: str = "J") -> list[dict]:
-        """
-        기관/외국인 순매수 상위 종목 (FHPST01770000)
-        market: "J"=KOSPI, "Q"=KOSDAQ
-        """
-        try:
-            d = self.get(
-                "FHPST01770000",
-                "/uapi/domestic-stock/v1/ranking/investor",
-                {
-                    "FID_COND_MRKT_DIV_CODE": market,
-                    "FID_COND_SCR_DIV_CODE": "20177",
-                    "FID_INPUT_ISCD": "0000",
-                    "FID_DIV_CLS_CODE": "0",
-                    "FID_BLNG_CLS_CODE": "0",
-                    "FID_TRGT_CLS_CODE": "111111111",
-                    "FID_TRGT_EXLS_CLS_CODE": "0000000000",
-                    "FID_INPUT_PRICE_1": "0",
-                    "FID_INPUT_PRICE_2": "0",
-                    "FID_VOL_CNT": "0",
-                    "FID_INPUT_DATE_1": "",
-                },
-            )
-            if d.get("rt_cd") == "0":
-                return d.get("output", [])
-            logger.warning(f"KIS investor_rank 실패: {d.get('msg1')}")
-        except Exception as e:
-            logger.warning(f"KIS investor_rank 예외: {e}")
-
-        # 폴백: 시장 전체 당일 기관/외국인 동향 (FHKST03900300)
-        try:
-            d2 = self.get(
-                "FHKST03900300",
-                "/uapi/domestic-stock/v1/quotations/inquire-investor",
-                {"FID_COND_MRKT_DIV_CODE": market, "FID_INPUT_ISCD": "0000"},
-            )
-            if d2.get("rt_cd") == "0":
-                return d2.get("output", [])
-        except Exception as e2:
-            logger.warning(f"KIS investor 폴백 실패: {e2}")
-        return []
-
     # ── 개별 종목 현재가/펀더멘털 ──
     def get_stock_price(self, ticker: str, market: str = "J") -> dict:
         """개별 종목 현재가 + PBR + 배당수익률"""
@@ -444,36 +401,6 @@ async def crawl_naver_individual(tickers: list[str], delay: float = 0.35) -> pd.
 # ─────────────────────────────────────────
 # KIS API 데이터 수집
 # ─────────────────────────────────────────
-
-def collect_kis_investor_rank(kis: KISClient) -> dict:
-    """KIS API로 기관/외국인 순매수 상위 종목 수집"""
-    result = {}
-    market_map = {"KOSPI": "J", "KOSDAQ": "Q"}
-
-    for market_name, market_code in market_map.items():
-        try:
-            ranks = kis.get_investor_rank(market_code)
-            if ranks:
-                # 컬럼명 매핑
-                rows = []
-                for r in ranks:
-                    rows.append({
-                        "티커": r.get("mksc_shrn_iscd", ""),
-                        "종목명": r.get("hts_kor_isnm", ""),
-                        "기관순매수": _safe_float(r.get("orgn_ntby_qty")),    # 기관 순매수량
-                        "외국인순매수": _safe_float(r.get("frgn_ntby_qty")), # 외국인 순매수량
-                        "기관순매수금액": _safe_float(r.get("orgn_ntby_tr_pbmn")),  # 억 단위 아닐 수 있음
-                        "외국인순매수금액": _safe_float(r.get("frgn_ntby_tr_pbmn")),
-                    })
-                result[market_name] = pd.DataFrame(rows)
-                logger.info(f"KIS 투자자 순위 ({market_name}): {len(rows)}개")
-            time.sleep(0.5)
-        except Exception as e:
-            logger.error(f"KIS 투자자 순위 수집 실패 ({market_name}): {e}")
-            result[market_name] = pd.DataFrame()
-
-    return result
-
 
 def collect_kis_market_info(kis: KISClient) -> dict:
     """KIS API로 KOSPI/KOSDAQ 지수 + 투자자별 매매 수집"""
@@ -1009,15 +936,6 @@ def collect_all(config: dict, midweek: bool = False) -> dict:
             df = df.copy()
             df["섹터"] = df["티커"].map(sector_map)
             result[market_name] = df
-
-    # ── 3. KIS API: 기관/외국인 순매수 상위 30 ──
-    logger.info("KIS API 기관/외국인 순매수 상위 종목 수집...")
-    try:
-        investor_ranks = collect_kis_investor_rank(kis)
-        result["investor_ranks"] = investor_ranks
-    except Exception as e:
-        logger.error(f"KIS 투자자 순위 수집 실패: {e}")
-        result["investor_ranks"] = {}
 
     # ── 4. KIS API: 지수 정보 ──
     logger.info("KIS API 지수 수집...")
