@@ -6,6 +6,7 @@ import logging
 import re
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -16,11 +17,35 @@ logger = logging.getLogger(__name__)
 SENTINEL_PATH = Path(__file__).resolve().parent.parent / "data" / "last_private_pdf.txt"
 
 
+KRX_RETRIES = 3
+KRX_RETRY_SLEEP = 2.0
+
+
+def _krx_ohlcv(start: str, end: str):
+    """KOSPI 지수 OHLCV 원본 조회. 지연 import — 테스트에서 mock 대상."""
+    from pykrx import stock
+    return stock.get_index_ohlcv_by_date(start, end, "1001")
+
+
 def _krx_trading_days(start: str, end: str) -> list[str]:
-    """KRX 캘린더 기준 거래일 목록(YYYYMMDD). 네트워크 실패 시 예외 전파."""
-    from pykrx import stock  # 지연 import — 테스트에서 mock 대상
-    df = stock.get_index_ohlcv_by_date(start, end, "1001")  # KOSPI 지수
-    return [d.strftime("%Y%m%d") for d in df.index]
+    """KRX 캘린더 기준 거래일 목록(YYYYMMDD). 재시도 후에도 실패하면 예외 전파.
+
+    KRX가 간헐적으로 비정상 응답을 돌려주면 pykrx가 KeyError('지수명')를 던진다
+    (2026-07-17·08-21 실측). 재시도 없이 달력 폴백으로 내려가면 휴장일이 주간
+    범위에 섞인다 — 08-21 발행분이 광복절 대체공휴일(08-17)을 포함한 채 나갔다.
+    """
+    last = None
+    for attempt in range(KRX_RETRIES):
+        try:
+            df = _krx_ohlcv(start, end)
+            return [d.strftime("%Y%m%d") for d in df.index]
+        except Exception as e:
+            last = e
+            if attempt < KRX_RETRIES - 1:
+                logger.warning(
+                    f"KRX 거래일 조회 실패({e!r}) — 재시도 {attempt + 1}/{KRX_RETRIES - 1}")
+                time.sleep(KRX_RETRY_SLEEP)
+    raise last
 
 
 def _calendar_weekdays(start_dt: datetime, end_dt: datetime) -> list[str]:
@@ -38,7 +63,10 @@ def compute_week_range(base_date: str) -> str:
     try:
         days = _krx_trading_days(monday.strftime("%Y%m%d"), base_date)
     except Exception as e:
-        logger.warning(f"KRX 거래일 조회 실패({e}) → 달력 폴백")
+        logger.warning(
+            f"KRX 거래일 조회 실패({e}) → 달력 폴백. "
+            "주간 범위는 월~금 전체를 쓴 **추정**이며 휴장일이 섞일 수 있다 "
+            "— 보고서 제목·볼트 파일명이 실제 거래일과 다를 수 있음")
         days = _calendar_weekdays(monday, base)
     if not days:
         days = [base_date]

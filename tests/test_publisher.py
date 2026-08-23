@@ -1,3 +1,4 @@
+import pytest
 from unittest import mock
 
 from modules import publisher
@@ -279,3 +280,36 @@ def test_publish_pdf_disabled_skips_personal_dm_too(tmp_path):
     # 볼트 반입만은 여전히 개인용 라우팅
     assert str(personal) in ingest.call_args[0][0]
     pdf.assert_not_called(); send.assert_not_called(); dm.assert_not_called()
+
+
+def test_krx_trading_days_retries_transient_failure():
+    """8/21·7/17 실측: pykrx가 비정상 응답에 KeyError('지수명')를 던진다 — 일시적이다.
+
+    재시도가 없으면 달력 폴백으로 내려가 휴장일이 주간 범위에 섞인다
+    (2026-08-17 광복절 대체공휴일이 실제로 그렇게 발행됐다).
+    """
+    import pandas as pd
+    ok = pd.DataFrame(index=pd.to_datetime(["20260818", "20260821"]))
+    with mock.patch.object(publisher, "_krx_ohlcv",
+                           side_effect=[KeyError("지수명"), ok]) as call, \
+         mock.patch.object(publisher.time, "sleep"):
+        assert publisher._krx_trading_days("20260817", "20260821") == ["20260818", "20260821"]
+        assert call.call_count == 2
+
+
+def test_krx_trading_days_gives_up_after_retries():
+    with mock.patch.object(publisher, "_krx_ohlcv", side_effect=KeyError("지수명")) as call, \
+         mock.patch.object(publisher.time, "sleep"):
+        with pytest.raises(KeyError):
+            publisher._krx_trading_days("20260817", "20260821")
+        assert call.call_count == 3
+
+
+def test_calendar_fallback_warns_that_range_may_include_holidays(caplog):
+    """폴백 결과는 추정이다 — 로그만 보고 제목을 신뢰하면 안 된다는 걸 남긴다."""
+    with mock.patch.object(publisher, "_krx_trading_days",
+                           side_effect=KeyError("지수명")), \
+         caplog.at_level("WARNING"):
+        publisher.compute_week_range("20260821")
+    msg = " ".join(r.message for r in caplog.records)
+    assert "휴장일" in msg and "추정" in msg
