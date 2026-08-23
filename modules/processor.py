@@ -279,9 +279,6 @@ def process(raw: dict) -> dict:
     """
     processed = {}
 
-    # investor_ranks (KIS API 기관/외국인 상위) 병합 준비
-    investor_ranks = raw.get("investor_ranks", {})
-
     for market in ["kospi", "kosdaq"]:
         df = raw.get(market, pd.DataFrame())
         if df.empty:
@@ -300,20 +297,6 @@ def process(raw: dict) -> dict:
         # 시가총액 컬럼 표준화
         if "시가총액(억)" in df.columns and "시가총액" not in df.columns:
             df = df.rename(columns={"시가총액(억)": "시가총액"})
-
-        # KIS 기관/외국인 순매수 데이터 병합
-        inv_df = investor_ranks.get(market.upper(), pd.DataFrame())
-        if not inv_df.empty and "티커" in inv_df.columns:
-            merge_cols = ["티커"]
-            for col in ["기관순매수금액", "외국인순매수금액"]:
-                if col in inv_df.columns:
-                    merge_cols.append(col)
-            df = df.merge(inv_df[merge_cols], on="티커", how="left")
-            # 컬럼명 표준화
-            if "기관순매수금액" in df.columns:
-                df = df.rename(columns={"기관순매수금액": "1주기관매매"})
-            if "외국인순매수금액" in df.columns:
-                df = df.rename(columns={"외국인순매수금액": "1주외국인매매"})
 
         # KRX 전종목 수급으로 대체 (소스 혼용 금지 — 스펙 §4.1)
         krx_flows = raw.get("krx_flows", pd.DataFrame())
@@ -348,7 +331,6 @@ def process(raw: dict) -> dict:
 
     # 지수/시장 정보 전달
     processed["market_info"] = raw.get("market_info", {})
-    processed["investor_ranks"] = investor_ranks
     processed["base_date"] = raw.get("base_date", "")
     processed["week_date"] = raw.get("week_date", raw.get("base_date", ""))
     processed["week_start"] = raw.get("week_start", "")

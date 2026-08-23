@@ -138,7 +138,6 @@ def reconstruct_processed(xlsx_path: str, week_date: str, db) -> dict:
         "kospi_top_stocks":   top_kospi,
         "kosdaq_top_stocks":  top_kosdaq,
         "market_info":        market_info,
-        "investor_ranks":     {},
         "n_weeks_in_db":      db.get_week_count(),
         "n_stock_weeks_in_db": db.get_stock_week_count(),
     }

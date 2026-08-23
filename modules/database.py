@@ -521,9 +521,12 @@ def upsert_week(
 
 
 def _build_market_data(processed: dict) -> dict:
-    """processed에서 weekly_market 테이블용 dict 생성 (KIS API 기반)"""
+    """processed에서 weekly_market 테이블용 dict 생성 (KIS 지수 데이터 기반)
+
+    weekly_foreign_net/inst_net/individual_net 컬럼은 채우지 않는다 — 시장 전체
+    수급은 weekly_stock 합산(get_market_flow_from_stock)이 원천이다 (SJAIINV-50).
+    """
     market_info = processed.get("market_info", {})
-    investor_ranks = processed.get("investor_ranks", {})
     result = {}
 
     for market in ["KOSPI", "KOSDAQ"]:
@@ -534,14 +537,6 @@ def _build_market_data(processed: dict) -> dict:
             info["index_close"] = idx.get("종가")
             info["daily_pt_change"] = idx.get("전일대비")
             info["daily_pct_change"] = idx.get("등락률")
-
-        # 기관/외국인 순매수 합산 (investor_ranks에서 집계)
-        inv_df = investor_ranks.get(market, pd.DataFrame())
-        if not inv_df.empty:
-            if "기관순매수금액" in inv_df.columns:
-                info["weekly_inst_net"] = float(inv_df["기관순매수금액"].sum())
-            if "외국인순매수금액" in inv_df.columns:
-                info["weekly_foreign_net"] = float(inv_df["외국인순매수금액"].sum())
 
         result[market] = info
 

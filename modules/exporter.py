@@ -122,7 +122,6 @@ def _write_market_sheet(ws, processed: dict):
                "외국인 주간순매수(억)", "기관 주간순매수(억)", "개인 주간순매수(억)"]
 
     market_info = processed.get("market_info", {})
-    investor_ranks = processed.get("investor_ranks", {})
 
     for col_idx, h in enumerate(headers, 1):
         cell = ws.cell(row=2, column=col_idx, value=h)
@@ -143,27 +142,17 @@ def _write_market_sheet(ws, processed: dict):
         weekly_pt = idx.get("주간등락(p)")
         weekly_pct = idx.get("주간등락률(%)")
 
-        # 투자자별 순매수
-        # 1순위: KIS investor_ranks (현재 API 빈 응답으로 항상 없음)
+        # 투자자별 순매수 — 섹터별 집계 합산 (전종목 기준; KRX 폴백 시 상위 200 근사)
         fore_net = inst_net = indiv_net = None
-        inv_df = investor_ranks.get(market_label, pd.DataFrame())
-        if not inv_df.empty:
-            if "외국인순매수금액" in inv_df.columns:
-                fore_net = float(inv_df["외국인순매수금액"].sum())
-            if "기관순매수금액" in inv_df.columns:
-                inst_net = float(inv_df["기관순매수금액"].sum())
-
-        # 2순위 폴백: 섹터별 집계 합산 (상위 200종목 기준 근사값)
-        if fore_net is None or inst_net is None:
-            sec_df = processed.get(
-                f"{'kospi' if market_label == 'KOSPI' else 'kosdaq'}_sector",
-                pd.DataFrame(),
-            )
-            if not sec_df.empty:
-                if fore_net is None and "1주외국인매매합(억)" in sec_df.columns:
-                    fore_net = float(sec_df["1주외국인매매합(억)"].sum())
-                if inst_net is None and "1주기관매매합(억)" in sec_df.columns:
-                    inst_net = float(sec_df["1주기관매매합(억)"].sum())
+        sec_df = processed.get(
+            f"{'kospi' if market_label == 'KOSPI' else 'kosdaq'}_sector",
+            pd.DataFrame(),
+        )
+        if not sec_df.empty:
+            if "1주외국인매매합(억)" in sec_df.columns:
+                fore_net = float(sec_df["1주외국인매매합(억)"].sum())
+            if "1주기관매매합(억)" in sec_df.columns:
+                inst_net = float(sec_df["1주기관매매합(억)"].sum())
 
         values = [market_label, index_close, weekly_pt, weekly_pct, daily_pt, daily_pct,
                   fore_net, inst_net, indiv_net]
