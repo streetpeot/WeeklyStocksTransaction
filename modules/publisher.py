@@ -10,7 +10,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from modules import notifier, pdf_export
+from modules import krx_auth, notifier, pdf_export
 
 logger = logging.getLogger(__name__)
 
@@ -33,12 +33,26 @@ def _krx_trading_days(start: str, end: str) -> list[str]:
     KRX가 간헐적으로 비정상 응답을 돌려주면 pykrx가 KeyError('지수명')를 던진다
     (2026-07-17·08-21 실측). 재시도 없이 달력 폴백으로 내려가면 휴장일이 주간
     범위에 섞인다 — 08-21 발행분이 광복절 대체공휴일(08-17)을 포함한 채 나갔다.
+
+    자격증명은 여기서 주입한다(멱등) — 수동 발행 CLI는 run_pipeline을 거치지
+    않아 주입 지점이 없었다 (SJAIINV-52). 주입에 실패하면 재시도해도 확정
+    실패이므로 즉시 포기한다.
     """
+    if not krx_auth.inject_credentials():
+        raise RuntimeError(
+            "KRX 자격증명 없음 (키체인 krx-data 미등록) — 재시도해도 실패하므로 즉시 포기")
+
     last = None
     for attempt in range(KRX_RETRIES):
         try:
             df = _krx_ohlcv(start, end)
-            return [d.strftime("%Y%m%d") for d in df.index]
+            days = [d.strftime("%Y%m%d") for d in df.index]
+            if not days:
+                # pykrx는 로그인 실패 등을 삼키고 빈 DataFrame을 돌려준다.
+                # 빈 결과를 통과시키면 compute_week_range가 [base_date]로 접어
+                # 단일 날짜 제목이 경고 없이 발행된다. crawler와 같은 취급.
+                raise RuntimeError(f"KRX 거래일 빈 응답 ({start}~{end}) — 로그인 실패 가능")
+            return days
         except Exception as e:
             last = e
             if attempt < KRX_RETRIES - 1:

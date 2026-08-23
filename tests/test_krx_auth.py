@@ -11,6 +11,12 @@ from modules import krx_auth
 def clean_env(monkeypatch):
     monkeypatch.delenv("KRX_ID", raising=False)
     monkeypatch.delenv("KRX_PW", raising=False)
+    yield
+    # inject_credentials 는 os.environ 에 직접 쓴다 — monkeypatch 가 추적하지
+    # 않으므로 가짜 자격증명이 세션에 남아, 뒤 테스트가 그 값으로 실제 KRX 에
+    # 로그인을 시도한다(단독 0.05s → 전체 4.7s 로 관측됨).
+    os.environ.pop("KRX_ID", None)
+    os.environ.pop("KRX_PW", None)
 
 
 def _mock_security(acct_stdout, pw_stdout):

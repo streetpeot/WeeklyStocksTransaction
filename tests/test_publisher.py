@@ -256,6 +256,10 @@ def test_publish_private_pdf_skips_send_and_writes_sentinel(tmp_path, monkeypatc
     sentinel = tmp_path / "data" / "last_private_pdf.txt"
     monkeypatch.setattr(publisher, "SENTINEL_PATH", sentinel)
 
+    # 주간 범위는 이 테스트의 관심사가 아니다 — mock 하지 않으면 실제 KRX 를 친다
+    monkeypatch.setattr(publisher, "_krx_trading_days",
+                        lambda s, e: ["20260713", "20260719"])
+
     errors = publisher.publish(config, report, private_pdf=True)
 
     assert sent == []                                   # 전송 스킵
@@ -313,3 +317,51 @@ def test_calendar_fallback_warns_that_range_may_include_holidays(caplog):
         publisher.compute_week_range("20260821")
     msg = " ".join(r.message for r in caplog.records)
     assert "휴장일" in msg and "추정" in msg
+
+
+def test_krx_trading_days_injects_credentials_before_calling_pykrx():
+    """수동 발행 CLI 는 run_pipeline 을 거치지 않아 주입 지점이 없었다 (SJAIINV-52)."""
+    import pandas as pd
+    ok = pd.DataFrame(index=pd.to_datetime(["20260818", "20260821"]))
+    calls = []
+    with mock.patch.object(publisher.krx_auth, "inject_credentials",
+                           side_effect=lambda: calls.append("inject") or True), \
+         mock.patch.object(publisher, "_krx_ohlcv",
+                           side_effect=lambda *a: calls.append("pykrx") or ok):
+        publisher._krx_trading_days("20260817", "20260821")
+    assert calls == ["inject", "pykrx"]
+
+
+def test_krx_trading_days_gives_up_immediately_when_credentials_missing():
+    """자격증명이 없으면 3회 전부 확정 실패다 — 4.8초와 pykrx 트레이스백 3벌을 낭비하지 않는다."""
+    with mock.patch.object(publisher.krx_auth, "inject_credentials", return_value=False), \
+         mock.patch.object(publisher, "_krx_ohlcv") as ohlcv, \
+         mock.patch.object(publisher.time, "sleep") as slept:
+        with pytest.raises(RuntimeError, match="자격증명"):
+            publisher._krx_trading_days("20260817", "20260821")
+        assert ohlcv.call_count == 0
+        assert slept.call_count == 0
+
+
+def test_krx_trading_days_treats_empty_frame_as_failure_not_empty_result():
+    """pykrx 는 로그인 실패를 삼키고 빈 DataFrame 을 돌려준다 — crawler 가 이미
+    "빈 응답도 실패로 취급"하는 선례가 있다. 빈 결과를 그대로 통과시키면
+    compute_week_range 가 days=[] → [base_date] 로 접어 **단일 날짜 제목**이
+    경고 없이 발행된다 (SJAIINV-52)."""
+    import pandas as pd
+    empty = pd.DataFrame()
+    with mock.patch.object(publisher.krx_auth, "inject_credentials", return_value=True), \
+         mock.patch.object(publisher, "_krx_ohlcv", return_value=empty) as ohlcv, \
+         mock.patch.object(publisher.time, "sleep"):
+        with pytest.raises(RuntimeError, match="빈 응답"):
+            publisher._krx_trading_days("20260817", "20260821")
+        assert ohlcv.call_count == 3  # 일시적일 수 있으므로 재시도는 한다
+
+
+def test_compute_week_range_does_not_collapse_to_single_date_on_empty_frame():
+    """위 취약점의 사용자 관점 증상 — 제목이 '20260821' 한 날짜로 나가면 안 된다."""
+    import pandas as pd
+    with mock.patch.object(publisher.krx_auth, "inject_credentials", return_value=True), \
+         mock.patch.object(publisher, "_krx_ohlcv", return_value=pd.DataFrame()), \
+         mock.patch.object(publisher.time, "sleep"):
+        assert publisher.compute_week_range("20260821") == "20260817~0821"  # 달력 폴백
