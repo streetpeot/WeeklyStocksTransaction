@@ -11,10 +11,7 @@ from pathlib import Path
 import pandas as pd
 import yaml
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
+# 로깅 설정은 __main__ 에서 modules.log_setup 이 한다 (SJAIINV-51)
 logger = logging.getLogger(__name__)
 
 # Excel 헤더 → processed 내부 컬럼명 매핑
@@ -191,4 +188,7 @@ def main():
 
 
 if __name__ == "__main__":
+    from modules.log_setup import setup_logging
+
+    setup_logging()
     main()

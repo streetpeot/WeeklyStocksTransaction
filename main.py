@@ -15,17 +15,11 @@ import pandas as pd
 import yaml
 
 # ─────────────────────────────────────────
-# 로깅 설정
+# 로깅 설정 — 실제 설정은 __main__ 에서 modules.log_setup 이 한다.
+# import 시점에 설정하면 이 모듈을 import 하는 테스트·검증 스크립트가
+# 운영 pipeline.log 를 오염시킨다 (SJAIINV-51).
 # ─────────────────────────────────────────
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler("pipeline.log", encoding="utf-8"),
-    ],
-)
 logger = logging.getLogger(__name__)
 
 
@@ -238,6 +232,9 @@ def run_pipeline(config: dict, midweek: bool = False):
 # ─────────────────────────────────────────
 
 if __name__ == "__main__":
+    from modules.log_setup import setup_logging
+
+    setup_logging("pipeline.log")
     config = load_config()
 
     if "--midweek" in sys.argv:
