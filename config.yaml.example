@@ -1,0 +1,43 @@
+# WST 설정 예시 — config.yaml 로 복사해 값을 채운다.
+#
+# ⚠️ API 키는 이 파일에 쓰지 않는다. macOS 키체인에서만 읽는다 (modules/secrets.py).
+#    등록:
+#      security add-generic-password -U -s wst-kis       -a "<APP_KEY>" -w "<APP_SECRET>"
+#      security add-generic-password -U -s wst-anthropic -a sjbossa     -w "<API_KEY>"
+#    provider 를 openai·google 로 바꾸면 서비스명도 wst-openai · wst-google 로 바뀐다.
+#    KRX 자격증명은 별도 항목 krx-data 를 쓴다 (modules/krx_auth.py).
+#
+# config.yaml 은 .gitignore 에 등록돼 있다. 절대 커밋하지 말 것.
+
+kis:
+  # app_key · app_secret 은 키체인 wst-kis 에서 읽는다 — 여기 쓰지 않는다
+  account_no: "00000000-00"
+
+ai:
+  provider: anthropic          # anthropic | openai | google
+  model: claude-sonnet-4-6
+  # api_key 는 키체인 wst-<provider> 에서 읽는다 — 여기 쓰지 않는다
+  max_tokens: 16384
+
+schedule:
+  day_of_week: fri
+  hour: 20
+  minute: 0
+  timezone: Asia/Seoul
+
+output:
+  excel_dir: ./data
+  report_dir: ./data
+  chart_dir: ./data/charts
+  history_db: ./history.db
+  excel_prefix: 주가자금동향
+  report_prefix: 주가자금동향
+  max_weeks: 52
+
+publish:
+  vault_ingest: /path/to/obsidian/vault/scripts/vault_ingest.py
+  title_prefix: 국내증시 자금동향
+  pdf_enabled: true
+  telegram_channel: "-1001234567890"   # 공유용 채널 ID
+  notify_chat_id: "123456789"          # 개인용 DM chat ID
+  watchlist_path: /path/to/obsidian/vault/wiki/topics/개인/워치리스트.md

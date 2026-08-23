@@ -54,8 +54,10 @@ EXCEL_TO_SRC = {
 
 
 def load_config(path="config.yaml") -> dict:
+    from modules import secrets
+
     with open(path, encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        return secrets.resolve(yaml.safe_load(f))
 
 
 def reconstruct_processed(xlsx_path: str, week_date: str, db) -> dict:
