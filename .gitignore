@@ -6,6 +6,7 @@ pipeline*.log
 .env
 .DS_Store
 *.pyc
-config.yaml
+config.yaml*
+!config.yaml.example
 .kis_token_cache.json
 .superpowers/
