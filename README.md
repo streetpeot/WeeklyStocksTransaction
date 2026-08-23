@@ -83,18 +83,19 @@ pip install -r requirements.txt
 
 ## 3. 환경변수 설정
 
-`config.yaml` 파일에 API 키와 설정을 입력합니다. (`.gitignore`에 등록되어 있어 git에 커밋되지 않습니다.)
+`config.yaml.example`을 `config.yaml`로 복사해 설정을 입력합니다. (`config.yaml*`은 `.gitignore`에 등록되어 있어 git에 커밋되지 않습니다.)
+
+> ⚠️ **API 키는 `config.yaml`에 쓰지 않습니다.** KIS·AI 키는 macOS 키체인에서만 읽습니다(아래 §키 등록). 평문으로 넣어도 무시되며, 키체인에 없으면 등록 명령을 안내하는 예외를 던지고 종료합니다.
 
 ```yaml
 kis:
-  app_key: "YOUR_KIS_APP_KEY"          # 한국투자증권 Developers에서 발급
-  app_secret: "YOUR_KIS_APP_SECRET"
+  # app_key · app_secret 은 키체인 wst-kis 에서 읽는다 — 여기 쓰지 않는다
   account_no: "XXXXXXXX-01"            # 계좌번호 (형식: 8자리-01)
 
 ai:
   provider: "anthropic"                # anthropic / openai / google
   model: "claude-sonnet-4-6"
-  api_key: "sk-ant-..."                # Anthropic API Key
+  # api_key 는 키체인 wst-<provider> 에서 읽는다 — 여기 쓰지 않는다
   max_tokens: 8192                     # claude-sonnet-4-6 최대 출력 토큰
 
 schedule:
@@ -121,7 +122,25 @@ publish:
   watchlist_path: "/path/to/obsidian-vault/wiki/topics/개인/워치리스트.md"  # 개인용 워치리스트(6자리 티커 표); 비우면 공유용만 발행
 ```
 
-### KIS API 발급
+### KIS·AI 키 등록 (키체인)
+
+KIS·Anthropic 키는 `config.yaml`이 아닌 macOS 키체인에서 읽는다(평문 시크릿 금지). KIS는 `app_key`·`app_secret`이 쌍으로 발급되므로 `krx-data`와 같이 **항목 하나**에 담는다(계정=app_key, 비밀번호=app_secret).
+
+```bash
+security add-generic-password -U -s wst-kis       -a "<APP_KEY>" -w "<APP_SECRET>"
+security add-generic-password -U -s wst-anthropic -a sjbossa     -w "<API_KEY>"
+```
+
+`ai.provider`를 바꾸면 서비스명도 따라 바뀐다(`wst-openai` · `wst-google`). **선언된 provider의 키만** 요구하므로 쓰지 않는 provider의 키는 등록할 필요가 없다.
+
+`modules/secrets.py`가 `security find-generic-password`로 조회해 `load_config()` 시점에 주입하며, 키체인에 없으면 위 명령을 안내하는 예외를 던진다. 등록 확인(값 미출력):
+
+```bash
+security find-generic-password -s wst-kis       -w >/dev/null 2>&1 && echo "wst-kis OK"
+security find-generic-password -s wst-anthropic -w >/dev/null 2>&1 && echo "wst-anthropic OK"
+```
+
+#### KIS API 발급
 
 1. [한국투자증권 Developers](https://apiportal.koreainvestment.com) 가입
 2. 앱 등록 → `app_key`, `app_secret` 발급
