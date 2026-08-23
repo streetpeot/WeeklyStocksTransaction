@@ -203,5 +203,7 @@ def _main():
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    from modules.log_setup import setup_logging
+
+    setup_logging()
     _main()
