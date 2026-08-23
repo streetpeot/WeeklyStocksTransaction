@@ -19,6 +19,8 @@ import requests
 import yaml
 from bs4 import BeautifulSoup
 
+from modules import krx_auth
+
 logger = logging.getLogger(__name__)
 
 NAVER_HEADERS = {
@@ -774,6 +776,8 @@ def crawl_krx_investor_flows(fromdate: str, todate: str) -> pd.DataFrame:
     Returns: DataFrame [티커, 시장, 1주기관매매, 1주외국인매매]
     Raises: RuntimeError (빈 응답), 기타 예외 전파 — 호출자가 폴백 결정.
     """
+    krx_auth.inject_credentials()  # 멱등 — 사용 지점이 스스로 보증 (SJAIINV-52)
+
     from pykrx import stock  # 지연 import — 테스트에서 mock 대상
 
     per_market = []
@@ -809,6 +813,8 @@ def crawl_krx_etf_flows(fromdate: str, todate: str, top_n: int = 120, time_budge
     거래대금 기준(억원). ETF 미거래 종목은 행 없음.
     KRX rate-limit(세션당 ~200콜) 회피 위해 전량이 아닌 거래대금 상위 top_n(기본 120)만 순회.
     """
+    krx_auth.inject_credentials()  # 멱등 — 사용 지점이 스스로 보증 (SJAIINV-52)
+
     import time as _time
 
     from pykrx import stock  # 지연 import — 테스트에서 mock 대상

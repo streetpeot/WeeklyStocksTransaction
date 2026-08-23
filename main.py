@@ -136,9 +136,8 @@ def run_pipeline(config: dict, midweek: bool = False):
     from modules import crawler, processor, database, exporter, visualizer, reporter
     from modules.processor import detect_rotation
 
-    # KRX 자격증명 주입 (키체인 → 환경변수). 실패해도 계속 — crawler가 폴백.
-    from modules import krx_auth
-    krx_auth.inject_credentials()
+    # KRX 자격증명은 pykrx 를 쓰는 함수가 스스로 주입한다 (멱등, SJAIINV-52).
+    # 여기서 부르면 그 경로를 거치지 않는 호출자가 조용히 로그인 없이 돈다.
 
     # [1] 데이터 수집
     logger.info("[1/6] 데이터 수집 (KIS + KRX + 네이버금융)...")
