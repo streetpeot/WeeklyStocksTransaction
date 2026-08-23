@@ -115,11 +115,13 @@ def _enrich_etf_trend(db, etf_flows: pd.DataFrame, n_weeks: int = 4) -> pd.DataF
 
 
 def load_config(path: str = "config.yaml") -> dict:
+    from modules import secrets
+
     config_path = Path(path)
     if not config_path.exists():
         raise FileNotFoundError(f"설정 파일 없음: {config_path.resolve()}")
     with open(config_path, encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        return secrets.resolve(yaml.safe_load(f))
 
 
 # ─────────────────────────────────────────
