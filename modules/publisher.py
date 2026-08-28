@@ -7,6 +7,8 @@ import re
 import subprocess
 import sys
 import time
+
+import requests
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -19,6 +21,43 @@ SENTINEL_PATH = Path(__file__).resolve().parent.parent / "data" / "last_private_
 
 KRX_RETRIES = 3
 KRX_RETRY_SLEEP = 2.0
+
+
+def _kis_headers() -> dict:
+    """KIS 인증 헤더 — 자격증명은 키체인에서 (진입점 무관, SJAIINV-52 원칙)."""
+    from modules import secrets
+    from modules.crawler import KISClient
+
+    app_key, app_secret = secrets.get_kis_credentials()
+    headers = KISClient(app_key, app_secret)._headers("CTCA0903R")
+    headers["custtype"] = "P"
+    return headers
+
+
+def _kis_open_days(start: str, end: str) -> list[str]:
+    """KIS 휴장일 조회(CTCA0903R)로 [start, end] 구간 개장일 목록(YYYYMMDD).
+
+    KRX 지수 엔드포인트는 금요일 저녁(=발행 시각)에 죽는다 — 07-17·08-21·08-28
+    3회 실측. 같은 시각 이 API 는 정상이었다 (SJAIINV-63).
+
+    ⚠️ 판정 필드는 opnd_yn(개장일). tr_day_yn 은 토요일도 'Y' 라(08-29 실측)
+    쓰면 토요일이 주간 범위에 들어간다.
+    """
+    from modules.crawler import KISClient
+
+    r = requests.get(
+        f"{KISClient.BASE}/uapi/domestic-stock/v1/quotations/chk-holiday",
+        headers=_kis_headers(),
+        params={"BASS_DT": start, "CTX_AREA_NK": "", "CTX_AREA_FK": ""},
+        timeout=15)
+    d = r.json()
+    if d.get("rt_cd") != "0":
+        raise RuntimeError(f"KIS 휴장일 조회 실패: {d.get('msg1', '').strip()}")
+    days = [row["bass_dt"] for row in d.get("output", [])
+            if row.get("opnd_yn") == "Y" and start <= row.get("bass_dt", "") <= end]
+    if not days:
+        raise RuntimeError(f"KIS 휴장일 조회 빈 응답 ({start}~{end})")
+    return days
 
 
 def _krx_ohlcv(start: str, end: str):
@@ -62,6 +101,15 @@ def _krx_trading_days(start: str, end: str) -> list[str]:
     raise last
 
 
+def _open_days(start: str, end: str) -> list[str]:
+    """개장일 목록 — KIS 1순위, 실패 시 KRX 폴백. 둘 다 실패하면 예외 전파."""
+    try:
+        return _kis_open_days(start, end)
+    except Exception as e:
+        logger.warning(f"KIS 휴장일 조회 실패({e!r}) → KRX 폴백")
+        return _krx_trading_days(start, end)
+
+
 def _calendar_weekdays(start_dt: datetime, end_dt: datetime) -> list[str]:
     days, d = [], start_dt
     while d <= end_dt:
@@ -75,7 +123,7 @@ def compute_week_range(base_date: str) -> str:
     base = datetime.strptime(base_date, "%Y%m%d")
     monday = base - timedelta(days=base.weekday())
     try:
-        days = _krx_trading_days(monday.strftime("%Y%m%d"), base_date)
+        days = _open_days(monday.strftime("%Y%m%d"), base_date)
     except Exception as e:
         logger.warning(
             f"KRX 거래일 조회 실패({e}) → 달력 폴백. "
