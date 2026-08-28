@@ -176,6 +176,10 @@ def publish(config: dict, report_path, *, personal_path=None, to_dm: bool = Fals
     pub = config.get("publish", {})
     report_path = Path(report_path)
     errors: list[str] = []
+    # 경고 ≠ 오류 (SJAIINV-64). vault_ingest exit 2 는 계약상 「반입 성공 + lint 경고」이고,
+    # lint 는 볼트 전체를 검사하므로 위반이 반입 파일 것이 아닐 수 있다(08-28 실측:
+    # 위반 전부 타 세션 파일). 오류로 섞으면 「발행 완료」가 억제돼 사후 판독이 틀어진다.
+    warnings: list[str] = []
     base_date = _base_date_from(report_path)
     name = dest_name_for(base_date, pub.get("title_prefix", "국내증시 자금동향"))
     chart_glob = str(Path(config["output"].get("chart_dir", "./data/charts")) / f"*_{base_date}.png")
@@ -193,7 +197,9 @@ def publish(config: dict, report_path, *, personal_path=None, to_dm: bool = Fals
              "--dest-name", name, "--assets", chart_glob],
             capture_output=True, text=True, timeout=600)
         if r.returncode == 2 and "반입 완료" in r.stdout:
-            errors.append(f"볼트 반입 lint 경고: {r.stderr.strip()[-300:]}")
+            warnings.append(
+                "볼트 전체 lint 경고 — 반입 파일과 무관할 수 있음(볼트 전수 검사): "
+                f"{r.stderr.strip()[-300:]}")
         elif r.returncode != 0:
             errors.append(f"볼트 반입 실패: {r.stderr.strip()[-300:]}")
     except Exception as e:
@@ -235,15 +241,25 @@ def publish(config: dict, report_path, *, personal_path=None, to_dm: bool = Fals
     else:
         logger.info("pdf_enabled=false — PDF 변환·전송 생략")
 
-    # ④ 통지 (실패는 삼킨다 — 로그만)
+    # ④ 통지 (통지 실패는 삼킨다 — 로그만)
     if errors:
         try:
             notifier.send_message(pub["notify_chat_id"],
                                   "⚠️ WST 발행 경고\n" + "\n".join(f"- {e}" for e in errors))
         except Exception as e:
             logger.error(f"통지 실패(무시): {e}")
+    elif warnings:
+        # 가시성은 유지한다 — 조용히 삼키면 TelegramDigest 의 「사라진 알림」 꼴이 된다.
+        try:
+            notifier.send_message(pub["notify_chat_id"],
+                                  "ℹ️ WST 발행 정상 — 참고 경고\n"
+                                  + "\n".join(f"- {w}" for w in warnings))
+        except Exception as e:
+            logger.error(f"통지 실패(무시): {e}")
     for e in errors:
         logger.error(e)
+    for w in warnings:
+        logger.warning(w)
     if not errors:
         logger.info(f"발행 완료: {name}")
     return errors

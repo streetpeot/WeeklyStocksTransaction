@@ -69,18 +69,32 @@ def test_publish_happy_path(tmp_path):
     dm.assert_not_called()  # 성공 시 무음
 
 
-def test_publish_ingest_lint_warning_notifies_but_continues(tmp_path):
+def test_publish_ingest_lint_warning_is_not_an_error(tmp_path, caplog):
+    """exit 2 는 vault_ingest 계약상 「반입 성공 + lint 경고」다 (SJAIINV-64).
+
+    게다가 lint 는 볼트 전체(3,167파일)를 검사하므로 위반이 반입 파일 것이
+    아닐 수 있다 — 08-28 실측: 위반 2건 모두 타 세션 파일. 오류로 분류하면
+    「WST 발행 경고」 DM 이 나가고 「발행 완료」가 억제돼 사후 판독까지 틀어진다.
+    가시성은 유지한다(정보성 DM + WARNING 로그) — 조용히 삼키지 않는다.
+    """
     md = _setup_report(tmp_path)
     with mock.patch.object(publisher, "dest_name_for", return_value="국내증시 자금동향_20260706~0710"), \
          mock.patch.object(publisher.subprocess, "run",
                            return_value=mock.Mock(returncode=2, stdout="반입 완료: ...", stderr="lint")), \
          mock.patch.object(publisher.pdf_export, "md_to_pdf", side_effect=lambda m, p: p) as pdf, \
          mock.patch.object(publisher.notifier, "send_document") as send, \
-         mock.patch.object(publisher.notifier, "send_message") as dm:
+         mock.patch.object(publisher.notifier, "send_message") as dm, \
+         caplog.at_level("INFO"):
         errs = publisher.publish(CFG, md)
-    assert len(errs) == 1 and "lint" in errs[0]
-    dm.assert_called_once()  # 경고 DM
-    assert pdf.called and send.called  # 파이프라인이 계속되었음
+    assert errs == []                                  # 발행 실패가 아니다
+    assert pdf.called and send.called                  # 파이프라인 계속
+    dm.assert_called_once()                            # 가시성 유지 — 정보성 DM
+    info = dm.call_args[0][1]
+    assert "ℹ️" in info and "볼트 전체 lint" in info and "무관" in info
+    assert "⚠️ WST 발행 경고" not in info               # 귀속이 틀린 옛 제목 금지
+    warn_recs = [r for r in caplog.records if "lint" in r.message]
+    assert warn_recs and all(r.levelname == "WARNING" for r in warn_recs)
+    assert any("발행 완료" in r.message for r in caplog.records)
 
 
 def test_publish_rc2_without_success_marker_is_failure(tmp_path):
