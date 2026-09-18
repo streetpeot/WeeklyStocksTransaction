@@ -756,6 +756,10 @@ def crawl_krx_etf_flows(fromdate: str, todate: str, top_n: int = 120, time_budge
     except Exception as e:
         logger.warning(f"ETF 거래대금 랭킹 실패({e}) → 이름목록 상위 {top_n}")
         tickers = all_tickers[:top_n]
+    if not tickers:
+        # pykrx는 KRX 장애를 예외가 아니라 행 0개짜리 표로 돌려준다. 그대로 두면 경고 없이
+        # 「0개 ETF」로 끝나 ETF 섹션이 조용히 빠진다(2026-09-19 00:23 실측, SJAIINV-197).
+        raise RuntimeError(f"KRX ETF 목록 빈 응답 ({fromdate}~{todate}) — KRX 점검·장애 가능")
     rows = []
     t0 = _time.time()
     for i, t in enumerate(tickers):
