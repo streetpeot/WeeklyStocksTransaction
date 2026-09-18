@@ -112,3 +112,18 @@ def test_collect_all_wires_etf(monkeypatch):
 
     assert list(result["etf_flows"]["티커"]) == ["069500"]
     assert result["etf_market_agg"] == {"외국인": 5.0}
+
+
+def test_crawl_etf_flows_raises_when_krx_returns_empty_universe():
+    """2026-09-19 00:23 실측: KRX ETF 엔드포인트가 행 0개짜리 표를 돌려주자 경고 없이
+    「0개 ETF」로 끝났고, 보고서가 ETF 섹션 없이 발행됐다. 빈 응답은 실패로 취급한다
+    (crawl_krx_investor_flows 와 같은 관례) — 그래야 collect_all 이 WARNING 을 남긴다."""
+    import pytest
+
+    empty_ranked = pd.DataFrame(columns=["거래대금"])
+    with patch("modules.crawler.krx_auth.inject_credentials", return_value=True), \
+         patch("pykrx.stock.get_etf_trading_volume_and_value", return_value=pd.DataFrame()), \
+         patch("pykrx.stock.get_etf_ticker_list", return_value=[]), \
+         patch("pykrx.stock.get_etf_price_change_by_ticker", return_value=empty_ranked):
+        with pytest.raises(RuntimeError, match="빈 응답"):
+            crawler.crawl_krx_etf_flows("20260914", "20260918")

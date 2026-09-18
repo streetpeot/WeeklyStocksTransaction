@@ -179,100 +179,80 @@ class KISClient:
 # 네이버금융 크롤링 (전종목)
 # ─────────────────────────────────────────
 
-def _parse_naver_market_page(html: str) -> list[dict]:
-    """네이버금융 시가총액 순위 페이지 파싱
-    컬럼 구조: N | 종목명 | 현재가 | 전일비 | 등락률 | 액면가 | 시가총액 | 상장주식수 | 외국인비율 | 거래량 | PER | ROE
+NAVER_API = "https://m.stock.naver.com/api"
+NAVER_PAGE_SIZE = 100
+
+
+def _naver_json(path: str, params: Optional[dict] = None) -> dict:
+    """네이버 증권 JSON API 호출.
+
+    finance.naver.com 웹페이지는 2026-09 초에 Npay 증권(JavaScript 렌더링)으로
+    이전돼 HTML 파싱이 0건이 됐다 (SJAIINV-197). 신규 서비스가 내부적으로 쓰는
+    이 JSON API 가 대체 경로다. 비공식이므로 응답 구조가 바뀔 수 있다 —
+    호출자는 빈 결과를 명시적 오류로 취급할 것.
     """
-    soup = BeautifulSoup(html, "lxml")
-    rows = soup.select("table.type_2 tbody tr")
-    records = []
-    for row in rows:
-        tds = row.find_all("td")
-        if len(tds) < 12:
-            continue
-        # 순위
-        rank_td = tds[0].get_text(strip=True)
-        if not rank_td.isdigit():
-            continue
-        # 종목 링크에서 티커 추출
-        link = row.find("a", href=True)
-        ticker = ""
-        if link:
-            href = link.get("href", "")
-            if "code=" in href:
-                ticker = href.split("code=")[-1].split("&")[0].strip()
-        name = tds[1].get_text(strip=True)
+    r = requests.get(f"{NAVER_API}{path}", params=params, headers=NAVER_HEADERS, timeout=10)
+    r.raise_for_status()
+    return r.json()
 
-        def parse_num(td_idx: int) -> Optional[float]:
-            t = tds[td_idx].get_text(strip=True).replace(",", "").replace("%", "")
-            try:
-                return float(t)
-            except ValueError:
-                return None
 
-        cur_price = parse_num(2)
-        trading_vol = parse_num(9)
-        # 거래대금 = 거래량 × 현재가 / 1억 (근사값)
-        trading_value = round(trading_vol * cur_price / 100_000_000, 2) if trading_vol and cur_price else None
-
-        records.append({
-            "순위": int(rank_td),
-            "티커": ticker,
-            "종목명": name,
-            "현재가": cur_price,
-            "전일대비": tds[3].get_text(strip=True),
-            "등락률_당일": parse_num(4),
-            "시가총액(억)": parse_num(6),
-            "상장주식수": parse_num(7),
-            "외국인비율(%)": parse_num(8),
-            "거래량": trading_vol,
-            "거래대금(억)": trading_value,
-            "PER": parse_num(10),
-            "ROE": parse_num(11),
-        })
-    return records
+def _to_float(v) -> Optional[float]:
+    try:
+        return float(str(v).replace(",", ""))
+    except (TypeError, ValueError):
+        return None
 
 
 def crawl_naver_market(market_code: int, max_pages: Optional[int] = None) -> pd.DataFrame:
     """
-    네이버금융 시장 전종목 시총 순위 크롤링
+    네이버 증권 시장 전종목 시총 순위 수집 (JSON API)
     market_code: 0=KOSPI, 1=KOSDAQ
     """
-    base_url = "https://finance.naver.com/sise/sise_market_sum.nhn"
-    all_records = []
-    session = requests.Session()
+    market = "KOSPI" if market_code == 0 else "KOSDAQ"
+    path = f"/stocks/marketValue/{market}"
 
-    # 전체 페이지 수 확인
-    r = session.get(base_url, params={"sosok": market_code, "page": 1},
-                    headers=NAVER_HEADERS, timeout=10)
-    soup = BeautifulSoup(r.text, "lxml")
-    pager = soup.select(".pgRR a")
-    if pager:
-        href = pager[0].get("href", "")
-        last_page = int(href.split("page=")[-1]) if "page=" in href else 1
-    else:
-        last_page = 1
-
+    first = _naver_json(path, {"page": 1, "pageSize": NAVER_PAGE_SIZE})
+    total = int(first.get("totalCount") or 0)
+    last_page = -(-total // NAVER_PAGE_SIZE) if total else 1
     if max_pages:
         last_page = min(last_page, max_pages)
+    logger.info(f"네이버 증권 {market} 수집: {total}종목 / {last_page}페이지")
 
-    logger.info(f"네이버금융 {'KOSPI' if market_code==0 else 'KOSDAQ'} 크롤링: {last_page}페이지")
-
+    all_records = []
     for page in range(1, last_page + 1):
         try:
-            r = session.get(base_url, params={"sosok": market_code, "page": page},
-                            headers=NAVER_HEADERS, timeout=10)
-            records = _parse_naver_market_page(r.text)
-            all_records.extend(records)
+            data = first if page == 1 else _naver_json(
+                path, {"page": page, "pageSize": NAVER_PAGE_SIZE})
+            for s in data.get("stocks", []):
+                value_won = _to_float(s.get("accumulatedTradingValueRaw"))
+                cap_won = _to_float(s.get("marketValueRaw"))
+                all_records.append({
+                    "순위": len(all_records) + 1,
+                    "티커": str(s.get("itemCode", "")),
+                    "종목명": s.get("stockName", ""),
+                    "현재가": _to_float(s.get("closePriceRaw")),
+                    "전일대비": s.get("compareToPreviousClosePrice", ""),
+                    "등락률_당일": _to_float(s.get("fluctuationsRatio")),
+                    "시가총액(억)": round(cap_won / 1e8, 2) if cap_won is not None else None,
+                    "거래량": _to_float(s.get("accumulatedTradingVolumeRaw")),
+                    # Raw 는 원 단위 실제 거래대금 — 기존의 거래량×현재가 근사보다 정확하다
+                    "거래대금(억)": round(value_won / 1e8, 2) if value_won is not None else None,
+                })
             if page % 10 == 0:
                 logger.info(f"  페이지 {page}/{last_page} 완료 ({len(all_records)}개)")
-            time.sleep(0.3)
+            if page < last_page:
+                time.sleep(0.3)
         except Exception as e:
             logger.warning(f"  페이지 {page} 실패: {e}")
 
+    if not all_records:
+        # 0건을 그대로 넘기면 하류에서 KeyError('티커') 로 죽어 원인 파악이 늦어진다
+        raise RuntimeError(
+            f"네이버 증권 {market} 전종목 수집 0건 — API 응답 구조 변경 가능 (SJAIINV-197)")
+
     df = pd.DataFrame(all_records)
     df = df[df["티커"].str.len() == 6].reset_index(drop=True)
-    logger.info(f"네이버금융 전종목 완료: {len(df)}개")
+    logger.info(f"네이버 증권 전종목 완료: {len(df)}개")
     return df
 
 
@@ -281,52 +261,43 @@ def crawl_naver_market(market_code: int, max_pages: Optional[int] = None) -> pd.
 # ─────────────────────────────────────────
 
 def build_sector_map() -> dict:
-    """네이버금융 업종별 종목 페이지로 {ticker: sector_name} 매핑 빌드
-    개별 4224 페이지 대신 ~80개 업종 페이지만 크롤링 (훨씬 빠름)
+    """네이버 증권 업종 API 로 {ticker: sector_name} 매핑 빌드.
+
+    업종 79개의 이름·번호 체계는 폐지된 sise_group 페이지와 동일하다
+    (2026-09-19 weekly_sector 이력과 79/79 일치 확인) — 섹터 이력이 끊기지 않는다.
     """
-    session = requests.Session()
     ticker_sector: dict = {}
 
-    # 1. 업종 목록 수집
+    # 1. 업종 목록
     try:
-        r = session.get(
-            "https://finance.naver.com/sise/sise_group.naver?type=upjong",
-            headers=NAVER_HEADERS, timeout=10,
-        )
-        soup = BeautifulSoup(r.content, "lxml", from_encoding="euc-kr")
-        sectors = []
-        for a in soup.select("table.type_1 td a"):
-            href = a.get("href", "")
-            if "no=" in href:
-                no = href.split("no=")[-1].split("&")[0]
-                name = a.get_text(strip=True)
-                if no and name:
-                    sectors.append((no, name))
+        groups = _naver_json("/stocks/industry",
+                             {"page": 1, "pageSize": NAVER_PAGE_SIZE}).get("groups", [])
+        sectors = [(g["no"], g["name"]) for g in groups if g.get("no") and g.get("name")]
     except Exception as e:
         logger.error(f"업종 목록 수집 실패: {e}")
         return {}
 
     logger.info(f"업종 수: {len(sectors)}개, 업종별 종목 매핑 빌드 중...")
 
-    # 2. 각 업종별 종목 수집
+    # 2. 업종별 구성 종목 (100개 초과 업종은 페이지를 넘긴다)
     for no, sector_name in sectors:
         try:
-            r2 = session.get(
-                f"https://finance.naver.com/sise/sise_group_detail.naver?type=upjong&no={no}",
-                headers=NAVER_HEADERS, timeout=10,
-            )
-            soup2 = BeautifulSoup(r2.content, "lxml", from_encoding="euc-kr")
-            seen: set = set()
-            for a in soup2.find_all("a", href=True):
-                href = a.get("href", "")
-                if "code=" in href:
-                    ticker = href.split("code=")[-1].split("&")[0]
-                    if len(ticker) == 6 and ticker not in seen:
+            page = 1
+            while True:
+                data = _naver_json(f"/stocks/industry/{no}",
+                                   {"page": page, "pageSize": NAVER_PAGE_SIZE})
+                stocks = data.get("stocks", [])
+                for st in stocks:
+                    ticker = str(st.get("itemCode", ""))
+                    if len(ticker) == 6:
                         ticker_sector[ticker] = sector_name
-                        seen.add(ticker)
-            time.sleep(0.2)
+                time.sleep(0.2)
+                total = int(data.get("totalCount") or 0)
+                if not stocks or page * NAVER_PAGE_SIZE >= total:
+                    break
+                page += 1
         except Exception as e:
-            logger.warning(f"업종 {sector_name}({no}) 크롤링 실패: {e}")
+            logger.warning(f"업종 {sector_name}({no}) 수집 실패: {e}")
 
     logger.info(f"섹터 매핑 완료: {len(ticker_sector)}개 종목")
     return ticker_sector
@@ -608,121 +579,73 @@ def crawl_period_returns_all(tickers: list, week_days: int = 5) -> pd.DataFrame:
 # 네이버금융 개별 종목 상세 (재무 + 투자자)
 # ─────────────────────────────────────────
 
-def _parse_naver_main_page(content: bytes, ticker: str, cur_price: Optional[float] = None, investor_days: int = 5) -> dict:
-    """
-    네이버금융 main.naver 페이지 파싱 (EUC-KR raw bytes 입력)
-    수집 항목:
-    - per_table: PBR, 배당수익률
-    - tb_type1_ifrs: 연간 재무실적 (매출액/영업이익/ROE/부채비율/영업이익률/증가율)
-    - tb_type1 (외국인/기관): 최근 investor_days일 순매수 합산 → 1주 기관/외국인 매매(억)
-    """
-    # main.naver 페이지는 UTF-8; BeautifulSoup이 자동 감지
-    soup = BeautifulSoup(content, "lxml")
-    result: dict = {"티커": ticker}
+def _num(text) -> Optional[float]:
+    """'11.66배' · '0.64%' · '+2,746,972' · '-' → float 또는 None."""
+    if text is None:
+        return None
+    m = re.search(r"[-+]?\d[\d,]*\.?\d*", str(text))
+    return _to_float(m.group(0).replace("+", "")) if m else None
 
-    # ── per_table: PBR, 배당수익률 ──
-    per_table = soup.find("table", class_="per_table")
-    if per_table:
-        pbr_em = per_table.find("em", id="_pbr")
-        if pbr_em:
-            result["PBR_NAVER"] = _safe_float(pbr_em.get_text(strip=True))
 
-        # 배당수익률: tr 단위로 검색 (tbody 구조에 무관하게)
-        for tr in per_table.find_all("tr"):
-            th = tr.find("th")
-            if th and "배당" in th.get_text():
-                td = tr.find("td")
-                if td:
-                    txt = td.get_text(strip=True).replace("%", "").replace(",", "").strip()
-                    result["배당수익률_NAVER"] = _safe_float(txt)
-                break
+def _parse_naver_integration(d: dict, cur_price: Optional[float] = None,
+                             investor_days: int = 5) -> dict:
+    """integration 응답 → PER·PBR·배당수익률 + 최근 investor_days일 외국인/기관 매매(억)."""
+    result: dict = {}
+    info = {t.get("code"): t.get("value") for t in d.get("totalInfos", [])}
+    for code, col in (("per", "PER_NAVER"), ("pbr", "PBR_NAVER"),
+                      ("dividendYieldRatio", "배당수익률_NAVER")):
+        v = _num(info.get(code))
+        if v is not None:
+            result[col] = v
 
-    # ── 기업실적분석 테이블: 연간 재무실적 ──
-    fin_table = None
-    for t in soup.find_all("table"):
-        cls = " ".join(t.get("class", []))
-        if "tb_type1_ifrs" in cls:
-            fin_table = t
-            break
-
-    if fin_table:
-        fin_data: dict = {}
-        for tr in fin_table.find_all("tr"):
-            th = tr.find("th")
-            if not th:
-                continue
-            label = th.get_text(strip=True)
-            vals = []
-            for td in tr.find_all("td"):
-                txt = td.get_text(strip=True).replace(",", "")
-                try:
-                    vals.append(float(txt))
-                except (ValueError, TypeError):
-                    vals.append(None)
-            if vals:
-                fin_data[label] = vals
-
-        def get_annual(key: str, idx: int = 2) -> Optional[float]:
-            v = fin_data.get(key, [])
-            return v[idx] if len(v) > idx else None
-
-        # ROE 행 레이블 동적 탐색 (ROE로 시작하는 첫 번째 키)
-        roe_key = next((k for k in fin_data if k.startswith("ROE")), None)
-
-        매출액_curr = get_annual("매출액", 2)
-        매출액_prev = get_annual("매출액", 1)
-        영업이익_curr = get_annual("영업이익", 2)
-        영업이익_prev = get_annual("영업이익", 1)
-
-        result["연간_매출액"]    = 매출액_curr
-        result["연간_영업이익"]  = 영업이익_curr
-        result["영업이익률"]     = get_annual("영업이익률", 2)
-        result["연간_ROE"]       = get_annual(roe_key, 2) if roe_key else None
-        result["부채비율"]       = get_annual("부채비율", 2)
-
-        # 매출/영업이익 증가율 (최근 연간 vs 전년)
-        if 매출액_curr and 매출액_prev and 매출액_prev != 0:
-            result["매출액_증가율"] = round(
-                (매출액_curr - 매출액_prev) / abs(매출액_prev) * 100, 2
-            )
-        if 영업이익_curr and 영업이익_prev and 영업이익_prev != 0:
-            result["영업이익_증가율"] = round(
-                (영업이익_curr - 영업이익_prev) / abs(영업이익_prev) * 100, 2
-            )
-
-    # ── 투자자별 매매동향: 최근 investor_days일 외국인/기관 합산 ──
-    for tbl in soup.find_all("table"):
-        cls = " ".join(tbl.get("class", []))
-        summary = tbl.get("summary", "")
-        if "tb_type1" not in cls:
+    # dealTrendInfos 는 최신 거래일이 먼저 온다 — 앞에서부터 investor_days 일만 합산
+    fore_sum = inst_sum = 0.0
+    count = 0
+    for row in d.get("dealTrendInfos", [])[:investor_days]:
+        fore_v = _num(row.get("foreignerPureBuyQuant"))
+        inst_v = _num(row.get("organPureBuyQuant"))
+        if fore_v is None or inst_v is None:
             continue
-        if "외국인" not in summary or "기관" not in summary:
-            continue
+        fore_sum += fore_v
+        inst_sum += inst_v
+        count += 1
+    if count > 0 and cur_price and cur_price > 0:
+        # 주(株) × 현재가 / 1억 = 억원
+        result["1주외국인매매"] = round(fore_sum * cur_price / 100_000_000, 2)
+        result["1주기관매매"] = round(inst_sum * cur_price / 100_000_000, 2)
+    return result
 
-        fore_sum = inst_sum = 0.0
-        count = 0
-        for tr in tbl.find_all("tr"):
-            tds = tr.find_all("td")
-            if len(tds) < 2:
-                continue
-            try:
-                # 마지막 두 열: 외국인, 기관 (단위: 주)
-                fore_v = float(tds[-2].get_text(strip=True).replace(",", "").replace("+", ""))
-                inst_v = float(tds[-1].get_text(strip=True).replace(",", "").replace("+", ""))
-                fore_sum += fore_v
-                inst_sum += inst_v
-                count += 1
-                if count >= investor_days:
-                    break
-            except (ValueError, IndexError):
-                pass
 
-        if count > 0 and cur_price and cur_price > 0:
-            # 주(株) × 현재가 / 1억 = 억원
-            result["1주외국인매매"] = round(fore_sum * cur_price / 100_000_000, 2)
-            result["1주기관매매"]   = round(inst_sum * cur_price / 100_000_000, 2)
-        break  # 첫 번째 매칭 테이블만 사용
+def _parse_naver_finance(d: dict) -> dict:
+    """finance/annual 응답 → 최근 확정 연도 실적과 전년 대비 증가율.
 
+    추정치 열(isConsensus=Y)은 제외한다 — 최근 실적으로 쓰면 컨센서스가 섞인다.
+    """
+    fi = d.get("financeInfo") or {}
+    confirmed = sorted(t["key"] for t in fi.get("trTitleList", [])
+                       if t.get("isConsensus") == "N" and t.get("key"))
+    if not confirmed:
+        return {}
+    curr_key = confirmed[-1]
+    prev_key = confirmed[-2] if len(confirmed) > 1 else None
+    rows = {r.get("title"): r.get("columns", {}) for r in fi.get("rowList", [])}
+
+    def val(title: str, key: Optional[str]) -> Optional[float]:
+        if key is None:
+            return None
+        return _num((rows.get(title, {}).get(key) or {}).get("value"))
+
+    result: dict = {}
+    for title, col in (("매출액", "연간_매출액"), ("영업이익", "연간_영업이익"),
+                       ("영업이익률", "영업이익률"), ("ROE", "연간_ROE"), ("부채비율", "부채비율")):
+        v = val(title, curr_key)
+        if v is not None:
+            result[col] = v
+
+    for title, col in (("매출액", "매출액_증가율"), ("영업이익", "영업이익_증가율")):
+        curr, prev = val(title, curr_key), val(title, prev_key)
+        if curr and prev and prev != 0:
+            result[col] = round((curr - prev) / abs(prev) * 100, 2)
     return result
 
 
@@ -734,33 +657,27 @@ def crawl_naver_stock_details(
     investor_days: int = 5,
 ) -> pd.DataFrame:
     """
-    상위 N개 종목의 Naver 상세 데이터 수집 (main.naver)
+    상위 N개 종목의 네이버 증권 상세 데이터 수집 (JSON API, 종목당 2콜)
     prices: {ticker: current_price} - 투자자 주수 → 억원 변환용
     investor_days: 투자자 매매 합산 거래일 수 (중간분석 시 이번 주 거래일 수)
-    수집 항목: PBR, 배당수익률, 연간 재무실적, 1주 기관/외국인 매매
+    수집 항목: PER, PBR, 배당수익률, 연간 재무실적, 1주 기관/외국인 매매
     """
-    session = requests.Session()
     results = []
     tickers = tickers[:n]
-
     for i, ticker in enumerate(tickers):
-        cur_price = prices.get(ticker)
+        row: dict = {"티커": ticker}
         try:
-            r = session.get(
-                f"https://finance.naver.com/item/main.naver?code={ticker}",
-                headers=NAVER_HEADERS,
-                timeout=10,
-            )
-            row = _parse_naver_main_page(r.content, ticker, cur_price, investor_days=investor_days)
-            results.append(row)
-            if (i + 1) % 50 == 0:
-                logger.info(f"Naver 상세 수집: {i+1}/{len(tickers)}")
-            time.sleep(delay)
+            row.update(_parse_naver_integration(
+                _naver_json(f"/stock/{ticker}/integration"),
+                prices.get(ticker), investor_days=investor_days))
+            row.update(_parse_naver_finance(_naver_json(f"/stock/{ticker}/finance/annual")))
         except Exception as e:
-            logger.debug(f"Naver 상세 수집 실패 ({ticker}): {e}")
-            results.append({"티커": ticker})
-
-    logger.info(f"Naver 상세 수집 완료: {len(results)}개")
+            logger.debug(f"네이버 상세 수집 실패 ({ticker}): {e}")
+        results.append(row)
+        if (i + 1) % 50 == 0:
+            logger.info(f"네이버 상세 수집: {i+1}/{len(tickers)}")
+        time.sleep(delay)
+    logger.info(f"네이버 상세 수집 완료: {len(results)}개")
     return pd.DataFrame(results) if results else pd.DataFrame()
 
 
@@ -839,6 +756,10 @@ def crawl_krx_etf_flows(fromdate: str, todate: str, top_n: int = 120, time_budge
     except Exception as e:
         logger.warning(f"ETF 거래대금 랭킹 실패({e}) → 이름목록 상위 {top_n}")
         tickers = all_tickers[:top_n]
+    if not tickers:
+        # pykrx는 KRX 장애를 예외가 아니라 행 0개짜리 표로 돌려준다. 그대로 두면 경고 없이
+        # 「0개 ETF」로 끝나 ETF 섹션이 조용히 빠진다(2026-09-19 00:23 실측, SJAIINV-197).
+        raise RuntimeError(f"KRX ETF 목록 빈 응답 ({fromdate}~{todate}) — KRX 점검·장애 가능")
     rows = []
     t0 = _time.time()
     for i, t in enumerate(tickers):
@@ -1020,7 +941,7 @@ def collect_all(config: dict, midweek: bool = False) -> dict:
             # 병합할 컬럼 목록
             detail_cols = ["티커"] + [
                 c for c in [
-                    "PBR_NAVER", "배당수익률_NAVER",
+                    "PER_NAVER", "PBR_NAVER", "배당수익률_NAVER",
                     "연간_매출액", "연간_영업이익", "영업이익률",
                     "연간_ROE", "부채비율",
                     "매출액_증가율", "영업이익_증가율",
@@ -1029,6 +950,11 @@ def collect_all(config: dict, midweek: bool = False) -> dict:
                 if c in details_df.columns
             ]
             df = df.merge(details_df[detail_cols], on="티커", how="left")
+
+            # PER: 전종목 JSON 대량 조회에는 PER 이 없다 — 상세(상위 N)에서 채운다 (SJAIINV-197)
+            if "PER_NAVER" in df.columns:
+                df["PER"] = df["PER_NAVER"]
+                df.drop(columns=["PER_NAVER"], inplace=True, errors="ignore")
 
             # PBR: Naver 우선 적용
             if "PBR_NAVER" in df.columns:
