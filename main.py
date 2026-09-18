@@ -226,6 +226,30 @@ def run_pipeline(config: dict, midweek: bool = False):
         logging.info("중간 실행(midweek) — 발행 단계 생략")
 
 
+def run_with_failure_notice(config: dict, midweek: bool = False):
+    """run_pipeline 을 실행하고, 죽으면 DM 으로 알린 뒤 예외를 그대로 다시 올린다.
+
+    통지 코드가 발행 단계에만 있어서, 수집 단계의 미처리 예외는 아무 말 없이
+    exit 1 로 끝났다(09-11·09-18 2주 연속, SJAIINV-197). 트레이스백도 boot 로그에만
+    남았다 — 여기서 logger.exception 으로 pipeline.log 에도 남긴다.
+    """
+    try:
+        run_pipeline(config, midweek=midweek)
+    except Exception as e:
+        logger.exception("파이프라인 실패")
+        # --private-pdf 는 텔레그램 발송 전면 금지 모드 — 실패 통지도 예외가 아니다
+        if "--private-pdf" not in sys.argv and config.get("publish"):
+            try:
+                from modules import notifier
+                notifier.send_message(
+                    config["publish"]["notify_chat_id"],
+                    f"❌ WST 파이프라인 실패 — 산출물 없음\n{type(e).__name__}: {str(e)[:300]}\n"
+                    "상세: pipeline.log · pipeline_boot.log")
+            except Exception:
+                logger.exception("실패 통지 전송 실패 (무시)")
+        raise
+
+
 # ─────────────────────────────────────────
 # 진입점
 # ─────────────────────────────────────────
@@ -238,11 +262,11 @@ if __name__ == "__main__":
 
     if "--midweek" in sys.argv:
         # 주중 WTD 중간 수급동향 (월~목 수동 실행 시)
-        run_pipeline(config, midweek=True)
+        run_with_failure_notice(config, midweek=True)
     elif "--run-now" in sys.argv:
         # 즉시 실행 — 금요일 마감 기준 주간 보고서
         # (crawler가 weekday를 보고 base_date를 last_friday로 자동 정렬)
-        run_pipeline(config, midweek=False)
+        run_with_failure_notice(config, midweek=False)
     else:
         # 스케줄러 시작
         from modules.scheduler import create_scheduler

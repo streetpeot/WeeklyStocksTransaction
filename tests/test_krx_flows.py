@@ -88,6 +88,8 @@ def test_collect_all_falls_back_to_naver_on_krx_failure():
         patch("modules.crawler.collect_kis_market_info", return_value={}),
         patch("modules.crawler.crawl_period_returns_all", return_value=pd.DataFrame()),
         patch("modules.crawler.crawl_naver_stock_details", return_value=pd.DataFrame()),
+        # ETF 수집을 mock 하지 않으면 실제 KRX 에 로그인해 조회한다 (SJAIINV-52 주입 이후)
+        patch("modules.crawler.crawl_krx_etf_flows", return_value=(pd.DataFrame(), None)),
         patch("modules.crawler.crawl_krx_investor_flows",
               side_effect=RuntimeError("KRX 순매수 빈 응답")),
     ):
@@ -113,6 +115,8 @@ def test_collect_all_uses_krx_on_success():
         patch("modules.crawler.collect_kis_market_info", return_value={}),
         patch("modules.crawler.crawl_period_returns_all", return_value=pd.DataFrame()),
         patch("modules.crawler.crawl_naver_stock_details", return_value=pd.DataFrame()),
+        # ETF 수집을 mock 하지 않으면 실제 KRX 에 로그인해 조회한다 (SJAIINV-52 주입 이후)
+        patch("modules.crawler.crawl_krx_etf_flows", return_value=(pd.DataFrame(), None)),
         patch("modules.crawler.crawl_krx_investor_flows", return_value=krx_df),
     ):
         result = crawler.collect_all(config)
