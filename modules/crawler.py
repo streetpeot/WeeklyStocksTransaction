@@ -148,7 +148,7 @@ class KISClient:
         iscd: "0001"=KOSPI, "1001"=KOSDAQ
         """
         d = self.get(
-            "FHKUP03500200",
+            "FHKUP03500100",  # FHKUP03500200 은 다른 TR — rt_cd=2 로 항상 빈 목록이었다 (2026-09-19 실측)
             "/uapi/domestic-stock/v1/quotations/inquire-daily-indexchartprice",
             {
                 "FID_COND_MRKT_DIV_CODE": "U",
