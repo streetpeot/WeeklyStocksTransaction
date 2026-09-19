@@ -207,7 +207,7 @@ def _build_data_context(processed: dict, chart_paths: dict, rotation_data: dict)
         )
     else:
         report_title = f"코스피/코스닥 주간 자금동향 ({date_str} 기준)"
-        period_desc = f"{date_str} 기준 (5거래일)"
+        period_desc = f"{date_str} 기준 ({biz_days}거래일)"  # 휴장 주간은 5 미만 (SJAIINV-202)
         midweek_note = ""
 
     return {

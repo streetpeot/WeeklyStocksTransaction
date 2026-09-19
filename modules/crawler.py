@@ -58,6 +58,23 @@ def prev_bday(d: date, n: int) -> date:
     return cur
 
 
+def _week_biz_days(monday: date, friday: date) -> int:
+    """[monday, friday] 개장일 수. 조회 실패 시 5로 폴백하고 경고한다.
+
+    5 로 고정하면 휴장 주간의 fchart 1주 등락률 창(봉 개수)에 전주 거래일이 들어간다
+    (SJAIINV-202). 출처는 발행 제목 범위(publisher.compute_week_range)와 같은
+    KIS 휴장일 API — 제목과 거래일 수가 서로 어긋나지 않게 한다.
+    """
+    from modules import publisher  # publisher 가 crawler 를 지연 import 한다 — 순환 회피
+
+    try:
+        return len(publisher._open_days(monday.strftime("%Y%m%d"), friday.strftime("%Y%m%d")))
+    except Exception as e:
+        logger.warning(f"개장일 조회 실패({e}) → 거래일수 5로 가정. "
+                       "휴장 주간이면 1주 등락률 창에 전주 거래일이 섞인다")
+        return 5
+
+
 # ─────────────────────────────────────────
 # KIS API 클라이언트
 # ─────────────────────────────────────────
@@ -838,14 +855,15 @@ def collect_all(config: dict, midweek: bool = False) -> dict:
         )
     else:
         # 금요일 또는 주말 실행: 기존 로직
-        biz_days = 5
         base = last_friday(today)
         week_friday = base
         week_start_dt = base - timedelta(days=4)  # 해당 주 월요일
+        biz_days = _week_biz_days(week_start_dt, base)  # 휴장 주간이면 5 미만 (SJAIINV-202)
         is_midweek = False
         period_label = ""
 
-    week_start = prev_bday(base, biz_days)  # biz_days 영업일 전
+    # 직전 주 마지막 평일. prev_bday(base, biz_days) 는 휴장 주간에 이번 주 안쪽을 가리켰다
+    week_start = prev_bday(week_start_dt, 1)
 
     base_str = base.strftime("%Y%m%d")
     week_start_str = week_start.strftime("%Y%m%d")
