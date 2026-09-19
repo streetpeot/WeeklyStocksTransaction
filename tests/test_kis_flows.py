@@ -187,6 +187,7 @@ def _patched_collect_all(kospi, kosdaq, flows_side_effect=None, etf_side_effect=
                           side_effect=flows_side_effect, return_value=flows_df),
         mock.patch.object(crawler, "crawl_kis_etf_flows",
                           side_effect=etf_side_effect, return_value=(etf_df, {"범위": "x"})),
+        mock.patch.object(crawler, "_week_biz_days", return_value=5),   # 실제 KIS 휴장일 조회 차단
     ]
     return patches
 
@@ -196,7 +197,8 @@ def test_collect_all_sends_only_stocks_to_flows_and_only_etfs_to_etf_crawl():
                         ("069500", "KODEX 200", 50000.0, 50.0, 5000.0, "etf")])
     kosdaq = _market_df([("247540", "에코프로비엠", 100000.0, 10.0, 300.0, "stock")])
     patches = _patched_collect_all(kospi, kosdaq)
-    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5] as flows, patches[6] as etf:
+    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5] as flows, \
+            patches[6] as etf, patches[7]:
         result = crawler.collect_all({"kis": {"app_key": "", "app_secret": ""}})
     tickers_by_market = flows.call_args[0][1]
     assert tickers_by_market == {"KOSPI": ["005930"], "KOSDAQ": ["247540"]}   # ETF 제외
@@ -211,7 +213,8 @@ def test_collect_all_falls_back_to_naver_sample_when_kis_flows_fail():
     kosdaq = _market_df([("247540", "에코프로비엠", 100000.0, 10.0, 300.0, "stock")])
     patches = _patched_collect_all(kospi, kosdaq, flows_side_effect=RuntimeError("KIS down"),
                                    etf_side_effect=RuntimeError("KIS down"))
-    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
+    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], \
+            patches[7]:
         result = crawler.collect_all({"kis": {"app_key": "", "app_secret": ""}})
     assert result["flow_source"] == "naver"
     assert result["investor_flows"].empty
