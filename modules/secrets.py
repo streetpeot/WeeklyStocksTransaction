@@ -1,7 +1,7 @@
 """시크릿 해석 — KIS·AI 키는 macOS 키체인에서만 읽는다 (config 평문 금지).
 
-선례: modules/notifier.py(텔레그램 토큰) · modules/krx_auth.py(KRX 자격증명).
-KIS는 app_key·app_secret이 쌍이므로 krx_auth와 같이 항목 하나에 담는다
+선례: modules/notifier.py(텔레그램 토큰).
+KIS는 app_key·app_secret이 쌍이므로 항목 하나에 담는다
 (acct=app_key, 비밀번호=app_secret).
 
 등록 (사람이 한다):

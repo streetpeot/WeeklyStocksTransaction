@@ -10,7 +10,7 @@ def _kc(returncode=0, stdout=""):
 
 
 def test_get_kis_credentials_reads_key_and_secret_from_one_item():
-    """acct에 app_key, 비밀번호에 app_secret — krx_auth와 같은 쌍 보관 방식."""
+    """acct에 app_key, 비밀번호에 app_secret — 쌍으로 발급되는 키를 항목 하나에 담는다."""
     attrs = _kc(stdout='    "acct"<blob>="APPKEY123"\n    "svce"<blob>="wst-kis"\n')
     pw = _kc(stdout="APPSECRET456\n")
     with mock.patch.object(secrets.subprocess, "run", side_effect=[attrs, pw]) as run:

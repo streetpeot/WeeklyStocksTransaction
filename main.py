@@ -136,23 +136,20 @@ def run_pipeline(config: dict, midweek: bool = False):
     from modules import crawler, processor, database, exporter, visualizer, reporter
     from modules.processor import detect_rotation
 
-    # KRX 자격증명은 pykrx 를 쓰는 함수가 스스로 주입한다 (멱등, SJAIINV-52).
-    # 여기서 부르면 그 경로를 거치지 않는 호출자가 조용히 로그인 없이 돈다.
-
     # [1] 데이터 수집
-    logger.info("[1/6] 데이터 수집 (KIS + KRX + 네이버금융)...")
+    logger.info("[1/6] 데이터 수집 (KIS + 네이버 증권)...")
     raw = crawler.collect_all(config, midweek=midweek)
 
-    # KRX 폴백 시 DM 경고 (스펙 §4.1) — private-pdf 모드는 텔레그램 발송 전면 금지
+    # 전종목 수급(KIS) 폴백 시 DM 경고 (스펙 §4.1) — private-pdf 모드는 텔레그램 발송 전면 금지
     if raw.get("flow_source") == "naver" and config.get("publish"):
         if "--private-pdf" not in sys.argv:
             try:
                 from modules import notifier
                 notifier.send_message(
                     config["publish"]["notify_chat_id"],
-                    "⚠️ WST: KRX 전종목 수급 실패 — Naver 상위200 폴백으로 진행")
+                    "⚠️ WST: KIS 전종목 수급 실패 — Naver 상위200 폴백으로 진행")
             except Exception:
-                logger.exception("KRX 폴백 통지 실패 (무시)")
+                logger.exception("수급 폴백 통지 실패 (무시)")
 
     # [2] 데이터 가공
     logger.info("[2/6] 데이터 가공 (파생 컬럼 + 섹터 집계)...")

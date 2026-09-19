@@ -298,10 +298,10 @@ def process(raw: dict) -> dict:
         if "시가총액(억)" in df.columns and "시가총액" not in df.columns:
             df = df.rename(columns={"시가총액(억)": "시가총액"})
 
-        # KRX 전종목 수급으로 대체 (소스 혼용 금지 — 스펙 §4.1)
-        krx_flows = raw.get("krx_flows", pd.DataFrame())
-        if not krx_flows.empty:
-            mkt_flows = krx_flows[krx_flows["시장"] == market.upper()]
+        # 전종목 수급(KIS)으로 대체 (소스 혼용 금지 — 스펙 §4.1)
+        investor_flows = raw.get("investor_flows", pd.DataFrame())
+        if not investor_flows.empty:
+            mkt_flows = investor_flows[investor_flows["시장"] == market.upper()]
             if not mkt_flows.empty:
                 drop_cols = [c for c in df.columns if c in ("1주기관매매", "1주외국인매매")]
                 if drop_cols:

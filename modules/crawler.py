@@ -1,8 +1,9 @@
 """
 crawler.py - 데이터 수집 모듈
-■ 네이버금융 페이지 스크래핑: 전종목 시총/주가/PER/ROE/외국인비율
-■ KIS REST API: 기관/외국인 순매수 상위 30, 지수, 개별 PBR·배당
-■ 네이버금융 개별: 섹터(업종), 재무 정보 (비동기)
+■ 네이버 증권 JSON API(m.stock.naver.com): 전종목 시총·시세, 업종, 상위 종목 상세
+■ KIS REST API(공식): 지수, 종목별 투자자 순매수(전종목·ETF), 휴장일
+■ fchart: 기간별 등락률 (비동기)
+※ KRX 스크래핑(pykrx)은 KRX 의 IP 제한(약관 위반 제재)으로 폐기했다 — SJAIINV-199
 """
 
 import asyncio
@@ -19,7 +20,6 @@ import requests
 import yaml
 from bs4 import BeautifulSoup
 
-from modules import krx_auth
 
 logger = logging.getLogger(__name__)
 
@@ -230,6 +230,7 @@ def crawl_naver_market(market_code: int, max_pages: Optional[int] = None) -> pd.
                     "순위": len(all_records) + 1,
                     "티커": str(s.get("itemCode", "")),
                     "종목명": s.get("stockName", ""),
+                    "종목유형": s.get("stockEndType", ""),  # stock · etf · etn … (수급 수집 대상 구분용)
                     "현재가": _to_float(s.get("closePriceRaw")),
                     "전일대비": s.get("compareToPreviousClosePrice", ""),
                     "등락률_당일": _to_float(s.get("fluctuationsRatio")),
@@ -682,105 +683,115 @@ def crawl_naver_stock_details(
 
 
 # ─────────────────────────────────────────
-# KRX 전종목 투자자 순매수 (일괄, 주 4콜)
+# KIS 종목별 투자자 순매수 (공식 API, 종목당 1콜)
 # ─────────────────────────────────────────
+#
+# KRX(pykrx 스크래핑)는 2026-09-19 에 이 머신의 IP 를 "자동화 수단을 통한 비정상 대량
+# 조회"로 1일간 제한했다 — 이용약관 제10조 제2호가 자동화 수집을 금지한다 (SJAIINV-199).
+# KIS 는 사용자 본인 계정의 공식 API 다. 09-04 주 대조: 기관은 KRX 기반 DB 값과
+# 소수점까지 일치, 외국인은 0.4~2% 차이(KIS 값에 기타외국인이 포함된 것으로 보인다).
 
-def crawl_krx_investor_flows(fromdate: str, todate: str) -> pd.DataFrame:
-    """KRX [12010] 투자자별 순매수 — 전종목 기관·외국인 주간 순매수(거래대금, 억원).
+KIS_INVESTOR_TR = "FHKST01010900"
+KIS_INVESTOR_PATH = "/uapi/domestic-stock/v1/quotations/inquire-investor"
+KIS_RATE_LIMIT_CODE = "EGW00201"  # 초당 거래건수 초과
 
-    시장(KOSPI/KOSDAQ) × 투자자(기관합계/외국인) = 4콜. KRX가 기간 집계를 수행.
-    pykrx는 로그인 실패 등에서 예외 없이 빈 DataFrame을 반환하므로 빈 응답도 실패로 취급.
+
+def fetch_kis_investor_daily(kis: KISClient, ticker: str) -> list[dict]:
+    """종목의 최근 30거래일 투자자별 순매수(일별). KOSPI·KOSDAQ·ETF 모두 시장코드 J."""
+    params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": ticker}
+    d = kis.get(KIS_INVESTOR_TR, KIS_INVESTOR_PATH, params)
+    if d.get("msg_cd") == KIS_RATE_LIMIT_CODE:
+        time.sleep(1.0)
+        d = kis.get(KIS_INVESTOR_TR, KIS_INVESTOR_PATH, params)
+    if d.get("rt_cd") != "0":
+        raise RuntimeError(f"KIS 투자자 조회 실패({ticker}): {str(d.get('msg1', '')).strip()}")
+    return d.get("output") or []
+
+
+def _sum_kis_flows(rows: list[dict], fromdate: str, todate: str,
+                   with_individual: bool = False) -> Optional[dict]:
+    """[fromdate, todate] 구간의 기관·외국인 순매수 거래대금 합(억원). 해당 일자가 없으면 None."""
+    sel = [r for r in rows if fromdate <= r.get("stck_bsop_date", "") <= todate]
+    if not sel:
+        return None
+
+    def total(key: str) -> float:
+        # tr_pbmn 단위는 백만원 → /100 = 억원
+        return round(sum(_to_float(r.get(key)) or 0.0 for r in sel) / 100, 2)
+
+    out = {"1주기관매매": total("orgn_ntby_tr_pbmn"), "1주외국인매매": total("frgn_ntby_tr_pbmn")}
+    if with_individual:
+        out["1주개인매매"] = total("prsn_ntby_tr_pbmn")
+    return out
+
+
+def crawl_kis_investor_flows(kis: KISClient, tickers_by_market: dict, fromdate: str,
+                             todate: str, delay: float = 0.12) -> pd.DataFrame:
+    """전종목 기관·외국인 주간 순매수(거래대금, 억원) — 종목당 1콜.
+
     Returns: DataFrame [티커, 시장, 1주기관매매, 1주외국인매매]
-    Raises: RuntimeError (빈 응답), 기타 예외 전파 — 호출자가 폴백 결정.
+    Raises: RuntimeError (빈 결과) — 호출자가 폴백을 결정한다.
+    개별 종목 실패는 건너뛴다. delay 0.12초 ≈ 초당 8콜 (KIS 실전 한도는 초당 20콜).
     """
-    krx_auth.inject_credentials()  # 멱등 — 사용 지점이 스스로 보증 (SJAIINV-52)
+    records = []
+    failed = 0
+    for market, tickers in tickers_by_market.items():
+        for i, ticker in enumerate(tickers):
+            try:
+                flows = _sum_kis_flows(fetch_kis_investor_daily(kis, ticker), fromdate, todate)
+                if flows is not None:
+                    records.append({"티커": ticker, "시장": market, **flows})
+            except Exception as e:
+                failed += 1
+                logger.debug(f"KIS 수급 조회 실패 ({ticker}): {e}")
+            if (i + 1) % 500 == 0:
+                logger.info(f"KIS 수급 수집 ({market}): {i + 1}/{len(tickers)}")
+            time.sleep(delay)
 
-    from pykrx import stock  # 지연 import — 테스트에서 mock 대상
-
-    per_market = []
-    for market in ["KOSPI", "KOSDAQ"]:
-        frames = []
-        for investor, col in [("기관합계", "1주기관매매"), ("외국인", "1주외국인매매")]:
-            df = stock.get_market_net_purchases_of_equities_by_ticker(
-                fromdate, todate, market, investor)
-            if df is None or df.empty:
-                raise RuntimeError(f"KRX 순매수 빈 응답: {market}/{investor} (로그인 실패 가능)")
-            frames.append(pd.DataFrame({
-                "티커": df.index.astype(str),
-                col: (df["순매수거래대금"] / 1e8).round(2).values,
-            }))
-        merged = frames[0].merge(frames[1], on="티커", how="outer")
-        merged["시장"] = market
-        per_market.append(merged)
-
-    result = pd.concat(per_market, ignore_index=True)
-    logger.info(f"KRX 전종목 수급 수집 완료: {len(result)}개 종목 (거래대금 기준)")
+    if not records:
+        raise RuntimeError(f"KIS 전종목 수급 빈 응답 ({fromdate}~{todate}, 실패 {failed}건)")
+    result = pd.DataFrame(records, columns=["티커", "시장", "1주기관매매", "1주외국인매매"])
+    logger.info(f"KIS 전종목 수급 수집 완료: {len(result)}개 종목 (실패 {failed}건)")
     return result
 
 
-# ─────────────────────────────────────────
-# KRX ETF 투자자 순매수 (시장 집계 1콜 + 개별 ETF 루프)
-# ─────────────────────────────────────────
+def crawl_kis_etf_flows(kis: KISClient, etf_universe: pd.DataFrame, fromdate: str, todate: str,
+                        top_n: int = 120, delay: float = 0.12):
+    """ETF 기관·외국인 주간 순매수 — 거래대금 상위 top_n ETF 를 KIS 로 조회.
 
-def crawl_krx_etf_flows(fromdate: str, todate: str, top_n: int = 120, time_budget: float = 300.0):
-    """KRX ETF 투자자 순매수 — 시장 전체 집계(1콜) + 거래대금 상위 top_n ETF 순매수.
-
-    Returns: (etf_flows[티커,종목명,1주기관매매,1주외국인매매], etf_market_agg{외국인,기관,개인}|None)
-    best-effort: 개별 티커 예외 스킵, time_budget(초) 초과 시 루프 중단, 집계 실패 시 None.
-    거래대금 기준(억원). ETF 미거래 종목은 행 없음.
-    KRX rate-limit(세션당 ~200콜) 회피 위해 전량이 아닌 거래대금 상위 top_n(기본 120)만 순회.
+    etf_universe: 네이버 증권 전종목 표에서 ETF 만 추린 것 [티커, 종목명, 거래대금(억)].
+    Returns: (etf_flows[티커,종목명,1주기관매매,1주외국인매매], agg{범위,외국인,기관,개인})
+    agg 는 **수집한 상위 N 의 합계**다 — KRX 가 주던 ETF 시장 전체 집계가 아니므로
+    그렇게 라벨링한다.
+    Raises: RuntimeError (유니버스·결과가 비었을 때) — 호출자가 ETF 섹션을 생략한다.
     """
-    krx_auth.inject_credentials()  # 멱등 — 사용 지점이 스스로 보증 (SJAIINV-52)
+    if etf_universe is None or etf_universe.empty:
+        raise RuntimeError("ETF 유니버스가 빈 표 — 네이버 전종목 표에 ETF 가 없다")
+    top = etf_universe.sort_values("거래대금(억)", ascending=False).head(top_n)
 
-    import time as _time
-
-    from pykrx import stock  # 지연 import — 테스트에서 mock 대상
-
-    # 시장 전체 집계 (1콜)
-    agg = None
-    try:
-        m = stock.get_etf_trading_volume_and_value(fromdate, todate)
-        agg = {}
-        for key, label in [("외국인", "외국인"), ("기관", "기관합계"), ("개인", "개인")]:
-            if label in m.index:
-                agg[key] = round(float(m.loc[label, ("거래대금", "순매수")]) / 1e8, 2)
-    except Exception as e:
-        logger.warning(f"ETF 시장 집계 실패: {e}")
-        agg = None
-
-    # 개별 ETF 루프 — 거래대금 상위 top_n만 (KRX rate-limit[~200콜/세션] 회피)
-    all_tickers = stock.get_etf_ticker_list(todate)  # 이름 캐시 워밍 + 랭킹 실패 시 폴백용
-    try:
-        pc = stock.get_etf_price_change_by_ticker(fromdate, todate)
-        tickers = list(pc.sort_values("거래대금", ascending=False).head(top_n).index)
-    except Exception as e:
-        logger.warning(f"ETF 거래대금 랭킹 실패({e}) → 이름목록 상위 {top_n}")
-        tickers = all_tickers[:top_n]
-    if not tickers:
-        # pykrx는 KRX 장애를 예외가 아니라 행 0개짜리 표로 돌려준다. 그대로 두면 경고 없이
-        # 「0개 ETF」로 끝나 ETF 섹션이 조용히 빠진다(2026-09-19 00:23 실측, SJAIINV-197).
-        raise RuntimeError(f"KRX ETF 목록 빈 응답 ({fromdate}~{todate}) — KRX 점검·장애 가능")
     rows = []
-    t0 = _time.time()
-    for i, t in enumerate(tickers):
-        if _time.time() - t0 > time_budget:
-            logger.warning(f"ETF 루프 time_budget({time_budget}s) 초과 — {i}/{len(tickers)}에서 중단")
-            break
+    agg = {"외국인": 0.0, "기관": 0.0, "개인": 0.0}
+    for ticker, name in zip(top["티커"], top["종목명"]):
         try:
-            df = stock.get_etf_trading_volume_and_value(fromdate, todate, t)
-            if df is None or df.empty:
-                continue
-            inst = round(float(df.loc["기관합계", ("거래대금", "순매수")]) / 1e8, 2) if "기관합계" in df.index else None
-            fore = round(float(df.loc["외국인", ("거래대금", "순매수")]) / 1e8, 2) if "외국인" in df.index else None
-            rows.append({"티커": t, "종목명": stock.get_etf_ticker_name(t),
-                         "1주기관매매": inst, "1주외국인매매": fore})
-        except Exception:
-            continue
-        if (i + 1) % 200 == 0:
-            logger.info(f"ETF 수급 수집: {i + 1}/{len(tickers)}")
+            flows = _sum_kis_flows(fetch_kis_investor_daily(kis, ticker), fromdate, todate,
+                                   with_individual=True)
+            if flows is not None:
+                rows.append({"티커": ticker, "종목명": name,
+                             "1주기관매매": flows["1주기관매매"],
+                             "1주외국인매매": flows["1주외국인매매"]})
+                agg["기관"] += flows["1주기관매매"]
+                agg["외국인"] += flows["1주외국인매매"]
+                agg["개인"] += flows["1주개인매매"]
+        except Exception as e:
+            logger.debug(f"KIS ETF 수급 조회 실패 ({ticker}): {e}")
+        time.sleep(delay)
 
-    etf_flows = pd.DataFrame(rows) if rows else pd.DataFrame()
-    logger.info(f"KRX ETF 수급 수집 완료: {len(etf_flows)}개 ETF (거래대금 기준)")
+    if not rows:
+        raise RuntimeError(f"KIS ETF 수급 빈 응답 ({fromdate}~{todate})")
+    etf_flows = pd.DataFrame(rows, columns=["티커", "종목명", "1주기관매매", "1주외국인매매"])
+    agg = {"범위": f"거래대금 상위 {len(rows)} ETF 합계",
+           **{k: round(v, 2) for k, v in agg.items()}}
+    logger.info(f"KIS ETF 수급 수집 완료: {len(etf_flows)}개 ETF")
     return etf_flows, agg
 
 
@@ -900,19 +911,33 @@ def collect_all(config: dict, midweek: bool = False) -> dict:
         except Exception as e:
             logger.error(f"fchart 기간별 등락률 수집 실패: {e}")
 
-    # ── 5.5 KRX 전종목 투자자 순매수 (기관·외국인, 주 4콜) ──
+    # ── 5.5 KIS 전종목 투자자 순매수 (기관·외국인, 종목당 1콜) ──
+    # KRX 스크래핑(pykrx)은 KRX 가 약관 위반으로 IP 를 제한해 폐기했다 (SJAIINV-199).
     monday_str = week_start_dt.strftime("%Y%m%d")
+
+    def _of_type(market_name: str, end_type: str) -> pd.DataFrame:
+        df = result.get(market_name, pd.DataFrame())
+        if df.empty or "종목유형" not in df.columns:
+            return pd.DataFrame()
+        return df[df["종목유형"] == end_type]
+
     try:
-        result["krx_flows"] = crawl_krx_investor_flows(monday_str, base_str)
-        result["flow_source"] = "krx"
+        tickers_by_market = {
+            m.upper(): list(_of_type(m, "stock")["티커"]) for m in ["kospi", "kosdaq"]
+        }
+        result["investor_flows"] = crawl_kis_investor_flows(kis, tickers_by_market,
+                                                            monday_str, base_str)
+        result["flow_source"] = "kis"
     except Exception as e:
-        logger.warning(f"KRX 전종목 수급 실패({e}) → Naver 상위200 폴백")
-        result["krx_flows"] = pd.DataFrame()
+        logger.warning(f"KIS 전종목 수급 실패({e}) → Naver 상위200 폴백")
+        result["investor_flows"] = pd.DataFrame()
         result["flow_source"] = "naver"
 
-    # ── 5.6 KRX ETF 수급 (시장 집계 + 개별 ETF, best-effort) ──
+    # ── 5.6 KIS ETF 수급 (거래대금 상위 ETF, best-effort) ──
     try:
-        etf_flows, etf_agg = crawl_krx_etf_flows(monday_str, base_str)
+        etf_universe = pd.concat([_of_type(m, "etf") for m in ["kospi", "kosdaq"]],
+                                 ignore_index=True)
+        etf_flows, etf_agg = crawl_kis_etf_flows(kis, etf_universe, monday_str, base_str)
         result["etf_flows"] = etf_flows
         result["etf_market_agg"] = etf_agg
     except Exception as e:
