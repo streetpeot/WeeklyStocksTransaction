@@ -22,7 +22,7 @@
 
 - **전종목 수집**: KOSPI 2,404개 + KOSDAQ 1,820개 시총/주가/PER/ROE/외국인비율
 - **기간별 등락률**: 1주/1개월/3개월/6개월 (비동기 수집, 약 9초)
-- **투자자 수급**: 기관·외국인 순매수 **전종목**(KRX 일괄수집, 실패 시 네이버 상위200 폴백). PBR·배당수익률·연간 재무는 상위 200종목
+- **투자자 수급**: 기관·외국인 순매수 **전종목**(KIS 공식 API, 종목당 1콜. 실패 시 네이버 상위200 폴백). PBR·배당수익률·연간 재무는 상위 200종목
 - **ETF 수급**: 거래대금 상위 120 ETF + 시장 전체 집계 → 보고서 별도 「ETF 수급」 섹션
 - **개인/공유 이중 보고서**: 공유용(채널)에 더해, 개인용(볼트·DM)에 워치리스트 종목 수급 섹션 추가
 - **DB 누적 이력**: SQLite에 52주치 이력 자동 관리 → 다기간 수급 누적 컬럼 자동 활성화
@@ -35,7 +35,7 @@
 | 항목 | 내용 |
 |------|------|
 | Python | 3.11+ |
-| 데이터 수집 | 네이버금융 크롤링, fchart 비공식 API, KIS REST API, KRX(pykrx≥1.2.8, 키체인 로그인) |
+| 데이터 수집 | 네이버 증권 JSON API(m.stock.naver.com), fchart 비공식 API, KIS REST API(지수·전종목/ETF 수급·휴장일) |
 | 비동기 | aiohttp + asyncio (fchart 4,224개 종목 동시 수집) |
 | DB | SQLite (4개 테이블, 52주 이력) |
 | AI | Anthropic Claude API (claude-sonnet-4-6) |
@@ -44,7 +44,7 @@
 ### 파이프라인 구조
 
 ```
-[1] crawler.py      네이버금융 + fchart + KIS + KRX(전종목·ETF 수급) → raw 데이터
+[1] crawler.py      네이버 증권 + fchart + KIS(전종목·ETF 수급) → raw 데이터
 [2] processor.py    파생 컬럼 + 시총비중 + 섹터 집계
 [3] database.py     SQLite UPSERT → DB 이력 기반 다기간 누적 보강
 [4] exporter.py     Excel 5탭 저장
@@ -62,7 +62,6 @@
 - macOS (AppleGothic 한글 폰트 필요)
 - Python 3.11+
 - KIS (한국투자증권) Developers API Key
-- KRX (한국거래소) 로그인 계정 — 전종목·ETF 수급 수집용(키체인 `krx-data`, 미설정 시 네이버 상위200 폴백)
 - Anthropic API Key
 
 ### 설치
@@ -124,7 +123,7 @@ publish:
 
 ### KIS·AI 키 등록 (키체인)
 
-KIS·Anthropic 키는 `config.yaml`이 아닌 macOS 키체인에서 읽는다(평문 시크릿 금지). KIS는 `app_key`·`app_secret`이 쌍으로 발급되므로 `krx-data`와 같이 **항목 하나**에 담는다(계정=app_key, 비밀번호=app_secret).
+KIS·Anthropic 키는 `config.yaml`이 아닌 macOS 키체인에서 읽는다(평문 시크릿 금지). KIS는 `app_key`·`app_secret`이 쌍으로 발급되므로 **항목 하나**에 담는다(계정=app_key, 비밀번호=app_secret).
 
 ```bash
 security add-generic-password -U -s wst-kis       -a "<APP_KEY>" -w "<APP_SECRET>"
@@ -146,13 +145,13 @@ security find-generic-password -s wst-anthropic -w >/dev/null 2>&1 && echo "wst-
 2. 앱 등록 → `app_key`, `app_secret` 발급
 3. 모의투자 또는 실전 계좌번호 확인
 
-### KRX 로그인 (키체인)
+### KRX 스크래핑은 쓰지 않는다 (2026-09 폐기)
 
-전종목·ETF 투자자 수급은 KRX 데이터(pykrx≥1.2.8)에서 수집한다. KRX는 익명 접근을 차단하므로 로그인이 필요하며, 계정은 `config.yaml`이 아닌 macOS 키체인에서 읽는다(평문 시크릿 금지). 미설정 시 자동으로 네이버 상위200 수급으로 폴백한다. rate-limit이 세션당 ~200콜이라 ETF는 거래대금 상위 120개만 수집한다.
+전종목·ETF 투자자 수급은 예전에 KRX 데이터(pykrx)에서 수집했다. 2026-09-19 에 KRX 가 이 머신의 IP 를 "자동화 수단을 통한 비정상 대량 조회"로 1일간 제한했고, 이용약관 제10조 제2호가 자동화 수집을 금지하며 재탐지 시 제한이 재적용된다고 안내했다. 탐지 직전에 보낸 것은 로그인 1회와 조회 5~7콜뿐이어서, 호출을 줄여서 피할 수 있는 문제가 아니다.
 
-```bash
-security add-generic-password -s krx-data -a "<KRX_ID>" -w "<KRX_PW>"
-```
+수급은 **KIS 공식 API**(`FHKST01010900` 종목별 투자자 매매동향, 최근 30거래일)로 옮겼다. 기관 수급은 KRX 기반 이력과 소수점까지 일치하고, 외국인 수급은 약 0.6% 차이가 난다(KIS 값에 기타외국인이 포함된 것으로 보인다). `tests/test_no_krx_scraping.py` 가 pykrx import 와 KRX 호스트 참조를 막는다 — pykrx 는 import 시점에 KRX 로그인을 시도한다.
+
+키체인의 `krx-data` 항목은 더 이상 쓰이지 않는다. 지워도 된다: `security delete-generic-password -s krx-data`
 
 ### 텔레그램 봇 토큰 (키체인)
 

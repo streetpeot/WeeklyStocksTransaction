@@ -5,29 +5,25 @@ from modules import publisher
 
 
 def test_week_range_normal_week():
-    # KRX 폴백 계층 성공 경로: 월~금 5거래일을 흉내 (KIS 는 실패 주입)
-    with mock.patch.object(publisher, "_kis_open_days", side_effect=RuntimeError("KIS down")), \
-         mock.patch.object(publisher, "_krx_trading_days",
+    # 월~금 5거래일
+    with mock.patch.object(publisher, "_kis_open_days",
                            return_value=["20260706", "20260707", "20260708", "20260709", "20260710"]):
         assert publisher.compute_week_range("20260710") == "20260706~0710"
 
 
 def test_week_range_holiday_week():
-    with mock.patch.object(publisher, "_kis_open_days", side_effect=RuntimeError("KIS down")), \
-         mock.patch.object(publisher, "_krx_trading_days",
+    with mock.patch.object(publisher, "_kis_open_days",
                            return_value=["20260303", "20260304"]):
         assert publisher.compute_week_range("20260304") == "20260303~0304"
 
 
 def test_week_range_single_day():
-    with mock.patch.object(publisher, "_kis_open_days", side_effect=RuntimeError("KIS down")), \
-         mock.patch.object(publisher, "_krx_trading_days", return_value=["20260710"]):
+    with mock.patch.object(publisher, "_kis_open_days", return_value=["20260710"]):
         assert publisher.compute_week_range("20260710") == "20260710"
 
 
-def test_week_range_fallback_when_krx_fails():
-    with mock.patch.object(publisher, "_kis_open_days", side_effect=RuntimeError("KIS down")), \
-         mock.patch.object(publisher, "_krx_trading_days", side_effect=RuntimeError("KRX down")):
+def test_week_range_falls_back_to_calendar_when_kis_fails():
+    with mock.patch.object(publisher, "_kis_open_days", side_effect=RuntimeError("KIS down")):
         # 2026-07-10 = 금 → 달력 폴백 월(0706)~기준일(0710)
         assert publisher.compute_week_range("20260710") == "20260706~0710"
 
@@ -274,8 +270,8 @@ def test_publish_private_pdf_skips_send_and_writes_sentinel(tmp_path, monkeypatc
     sentinel = tmp_path / "data" / "last_private_pdf.txt"
     monkeypatch.setattr(publisher, "SENTINEL_PATH", sentinel)
 
-    # 주간 범위는 이 테스트의 관심사가 아니다 — mock 하지 않으면 실제 KRX 를 친다
-    monkeypatch.setattr(publisher, "_krx_trading_days",
+    # 주간 범위는 이 테스트의 관심사가 아니다 — mock 하지 않으면 실제 KIS 를 호출한다
+    monkeypatch.setattr(publisher, "_kis_open_days",
                         lambda s, e: ["20260713", "20260719"])
 
     errors = publisher.publish(config, report, private_pdf=True)
@@ -304,87 +300,14 @@ def test_publish_pdf_disabled_skips_personal_dm_too(tmp_path):
     pdf.assert_not_called(); send.assert_not_called(); dm.assert_not_called()
 
 
-def test_krx_trading_days_retries_transient_failure():
-    """8/21·7/17 실측: pykrx가 비정상 응답에 KeyError('지수명')를 던진다 — 일시적이다.
-
-    재시도가 없으면 달력 폴백으로 내려가 휴장일이 주간 범위에 섞인다
-    (2026-08-17 광복절 대체공휴일이 실제로 그렇게 발행됐다).
-    """
-    import pandas as pd
-    ok = pd.DataFrame(index=pd.to_datetime(["20260818", "20260821"]))
-    with mock.patch.object(publisher, "_krx_ohlcv",
-                           side_effect=[KeyError("지수명"), ok]) as call, \
-         mock.patch.object(publisher.time, "sleep"):
-        assert publisher._krx_trading_days("20260817", "20260821") == ["20260818", "20260821"]
-        assert call.call_count == 2
-
-
-def test_krx_trading_days_gives_up_after_retries():
-    with mock.patch.object(publisher, "_krx_ohlcv", side_effect=KeyError("지수명")) as call, \
-         mock.patch.object(publisher.time, "sleep"):
-        with pytest.raises(KeyError):
-            publisher._krx_trading_days("20260817", "20260821")
-        assert call.call_count == 3
-
-
 def test_calendar_fallback_warns_that_range_may_include_holidays(caplog):
     """폴백 결과는 추정이다 — 로그만 보고 제목을 신뢰하면 안 된다는 걸 남긴다."""
-    with mock.patch.object(publisher, "_kis_open_days", side_effect=RuntimeError("KIS down")), \
-         mock.patch.object(publisher, "_krx_trading_days",
-                           side_effect=KeyError("지수명")), \
+    with mock.patch.object(publisher, "_kis_open_days",
+                           side_effect=RuntimeError("KIS down")), \
          caplog.at_level("WARNING"):
         publisher.compute_week_range("20260821")
     msg = " ".join(r.message for r in caplog.records)
     assert "휴장일" in msg and "추정" in msg
-
-
-def test_krx_trading_days_injects_credentials_before_calling_pykrx():
-    """수동 발행 CLI 는 run_pipeline 을 거치지 않아 주입 지점이 없었다 (SJAIINV-52)."""
-    import pandas as pd
-    ok = pd.DataFrame(index=pd.to_datetime(["20260818", "20260821"]))
-    calls = []
-    with mock.patch.object(publisher.krx_auth, "inject_credentials",
-                           side_effect=lambda: calls.append("inject") or True), \
-         mock.patch.object(publisher, "_krx_ohlcv",
-                           side_effect=lambda *a: calls.append("pykrx") or ok):
-        publisher._krx_trading_days("20260817", "20260821")
-    assert calls == ["inject", "pykrx"]
-
-
-def test_krx_trading_days_gives_up_immediately_when_credentials_missing():
-    """자격증명이 없으면 3회 전부 확정 실패다 — 4.8초와 pykrx 트레이스백 3벌을 낭비하지 않는다."""
-    with mock.patch.object(publisher.krx_auth, "inject_credentials", return_value=False), \
-         mock.patch.object(publisher, "_krx_ohlcv") as ohlcv, \
-         mock.patch.object(publisher.time, "sleep") as slept:
-        with pytest.raises(RuntimeError, match="자격증명"):
-            publisher._krx_trading_days("20260817", "20260821")
-        assert ohlcv.call_count == 0
-        assert slept.call_count == 0
-
-
-def test_krx_trading_days_treats_empty_frame_as_failure_not_empty_result():
-    """pykrx 는 로그인 실패를 삼키고 빈 DataFrame 을 돌려준다 — crawler 가 이미
-    "빈 응답도 실패로 취급"하는 선례가 있다. 빈 결과를 그대로 통과시키면
-    compute_week_range 가 days=[] → [base_date] 로 접어 **단일 날짜 제목**이
-    경고 없이 발행된다 (SJAIINV-52)."""
-    import pandas as pd
-    empty = pd.DataFrame()
-    with mock.patch.object(publisher.krx_auth, "inject_credentials", return_value=True), \
-         mock.patch.object(publisher, "_krx_ohlcv", return_value=empty) as ohlcv, \
-         mock.patch.object(publisher.time, "sleep"):
-        with pytest.raises(RuntimeError, match="빈 응답"):
-            publisher._krx_trading_days("20260817", "20260821")
-        assert ohlcv.call_count == 3  # 일시적일 수 있으므로 재시도는 한다
-
-
-def test_compute_week_range_does_not_collapse_to_single_date_on_empty_frame():
-    """위 취약점의 사용자 관점 증상 — 제목이 '20260821' 한 날짜로 나가면 안 된다."""
-    import pandas as pd
-    with mock.patch.object(publisher, "_kis_open_days", side_effect=RuntimeError("KIS down")), \
-         mock.patch.object(publisher.krx_auth, "inject_credentials", return_value=True), \
-         mock.patch.object(publisher, "_krx_ohlcv", return_value=pd.DataFrame()), \
-         mock.patch.object(publisher.time, "sleep"):
-        assert publisher.compute_week_range("20260821") == "20260817~0821"  # 달력 폴백
 
 
 # ── SJAIINV-63: 발행 단계 거래일 조회는 KIS 휴장일 API 가 1순위 ──
@@ -429,18 +352,3 @@ def test_kis_open_days_treats_empty_result_as_failure():
          mock.patch.object(publisher.requests, "get", return_value=_kis_resp(rows)):
         with pytest.raises(RuntimeError, match="빈 응답"):
             publisher._kis_open_days("20260824", "20260828")
-
-
-def test_compute_week_range_prefers_kis_and_skips_krx():
-    with mock.patch.object(publisher, "_kis_open_days",
-                           return_value=["20260818", "20260819", "20260820", "20260821"]), \
-         mock.patch.object(publisher, "_krx_trading_days") as krx:
-        assert publisher.compute_week_range("20260821") == "20260818~0821"
-        krx.assert_not_called()
-
-
-def test_compute_week_range_falls_back_to_krx_when_kis_fails():
-    with mock.patch.object(publisher, "_kis_open_days", side_effect=RuntimeError("KIS down")), \
-         mock.patch.object(publisher, "_krx_trading_days",
-                           return_value=["20260818", "20260819", "20260820", "20260821"]):
-        assert publisher.compute_week_range("20260821") == "20260818~0821"

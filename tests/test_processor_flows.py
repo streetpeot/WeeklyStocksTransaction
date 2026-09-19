@@ -4,7 +4,7 @@ import pytest
 from modules import processor
 
 
-def _raw(krx_flows, flow_source):
+def _raw(investor_flows, flow_source):
     kospi = pd.DataFrame({
         "티커": ["005930", "000660"],
         "종목명": ["삼성전자", "SK하이닉스"],
@@ -17,23 +17,23 @@ def _raw(krx_flows, flow_source):
     return {
         "kospi": kospi, "kosdaq": pd.DataFrame(),
         "market_info": {},
-        "base_date": "20260717", "krx_flows": krx_flows, "flow_source": flow_source,
+        "base_date": "20260717", "investor_flows": investor_flows, "flow_source": flow_source,
     }
 
 
-def test_krx_flows_replace_naver_values():
-    krx = pd.DataFrame({
+def test_investor_flows_replace_naver_values():
+    flows = pd.DataFrame({
         "티커": ["005930", "000660"], "시장": ["KOSPI", "KOSPI"],
         "1주기관매매": [1.5, -3.0], "1주외국인매매": [-2.0, 4.0],
     })
-    out = processor.process(_raw(krx, "krx"))
+    out = processor.process(_raw(flows, "kis"))
     df = out["kospi"]
     assert list(df.columns).count("1주기관매매") == 1  # 중복 컬럼 없음
     s = df.set_index("티커")
-    assert s.loc["005930", "1주기관매매"] == pytest.approx(1.5)   # 999 아님 — KRX로 대체
+    assert s.loc["005930", "1주기관매매"] == pytest.approx(1.5)   # 999 아님 — 전종목 수급으로 대체
     assert s.loc["000660", "1주외국인매매"] == pytest.approx(4.0)  # 표본 밖 종목도 채워짐
-    assert out["flow_source"] == "krx"
-    # 파생 비중도 KRX 값 기준
+    assert out["flow_source"] == "kis"
+    # 파생 비중도 전종목 수급 값 기준
     assert s.loc["005930", "시가대비_기관매매비중_1주"] == pytest.approx(1.5 / 4000000 * 100)
 
 

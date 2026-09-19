@@ -240,8 +240,8 @@ def test_collect_all_fills_per_from_details_stage():
          mock.patch.object(crawler, "collect_kis_market_info", return_value={}), \
          mock.patch.object(crawler, "crawl_period_returns_all", return_value=pd.DataFrame()), \
          mock.patch.object(crawler, "crawl_naver_stock_details", return_value=details), \
-         mock.patch.object(crawler, "crawl_krx_investor_flows", side_effect=RuntimeError("x")), \
-         mock.patch.object(crawler, "crawl_krx_etf_flows", side_effect=RuntimeError("x")):
+         mock.patch.object(crawler, "crawl_kis_investor_flows", side_effect=RuntimeError("x")), \
+         mock.patch.object(crawler, "crawl_kis_etf_flows", side_effect=RuntimeError("x")):
         result = crawler.collect_all({"kis": {"app_key": "", "app_secret": ""}})
     row = result["kospi"].set_index("티커").loc["005930"]
     assert row["PER"] == pytest.approx(11.66)

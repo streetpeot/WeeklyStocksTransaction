@@ -6,21 +6,16 @@ import logging
 import re
 import subprocess
 import sys
-import time
-
-import requests
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from modules import krx_auth, notifier, pdf_export
+import requests
+
+from modules import notifier, pdf_export
 
 logger = logging.getLogger(__name__)
 
 SENTINEL_PATH = Path(__file__).resolve().parent.parent / "data" / "last_private_pdf.txt"
-
-
-KRX_RETRIES = 3
-KRX_RETRY_SLEEP = 2.0
 
 
 def _kis_headers() -> dict:
@@ -37,8 +32,8 @@ def _kis_headers() -> dict:
 def _kis_open_days(start: str, end: str) -> list[str]:
     """KIS 휴장일 조회(CTCA0903R)로 [start, end] 구간 개장일 목록(YYYYMMDD).
 
-    KRX 지수 엔드포인트는 금요일 저녁(=발행 시각)에 죽는다 — 07-17·08-21·08-28
-    3회 실측. 같은 시각 이 API 는 정상이었다 (SJAIINV-63).
+    SJAIINV-63 에서 도입했다. 당시 KRX 지수 조회의 반복 실패는 시간대성 장애가 아니라
+    KRX 의 자동화 탐지에 걸린 것으로 보인다 (SJAIINV-199 에서 정정).
 
     ⚠️ 판정 필드는 opnd_yn(개장일). tr_day_yn 은 토요일도 'Y' 라(08-29 실측)
     쓰면 토요일이 주간 범위에 들어간다.
@@ -60,54 +55,13 @@ def _kis_open_days(start: str, end: str) -> list[str]:
     return days
 
 
-def _krx_ohlcv(start: str, end: str):
-    """KOSPI 지수 OHLCV 원본 조회. 지연 import — 테스트에서 mock 대상."""
-    from pykrx import stock
-    return stock.get_index_ohlcv_by_date(start, end, "1001")
-
-
-def _krx_trading_days(start: str, end: str) -> list[str]:
-    """KRX 캘린더 기준 거래일 목록(YYYYMMDD). 재시도 후에도 실패하면 예외 전파.
-
-    KRX가 간헐적으로 비정상 응답을 돌려주면 pykrx가 KeyError('지수명')를 던진다
-    (2026-07-17·08-21 실측). 재시도 없이 달력 폴백으로 내려가면 휴장일이 주간
-    범위에 섞인다 — 08-21 발행분이 광복절 대체공휴일(08-17)을 포함한 채 나갔다.
-
-    자격증명은 여기서 주입한다(멱등) — 수동 발행 CLI는 run_pipeline을 거치지
-    않아 주입 지점이 없었다 (SJAIINV-52). 주입에 실패하면 재시도해도 확정
-    실패이므로 즉시 포기한다.
-    """
-    if not krx_auth.inject_credentials():
-        raise RuntimeError(
-            "KRX 자격증명 없음 (키체인 krx-data 미등록) — 재시도해도 실패하므로 즉시 포기")
-
-    last = None
-    for attempt in range(KRX_RETRIES):
-        try:
-            df = _krx_ohlcv(start, end)
-            days = [d.strftime("%Y%m%d") for d in df.index]
-            if not days:
-                # pykrx는 로그인 실패 등을 삼키고 빈 DataFrame을 돌려준다.
-                # 빈 결과를 통과시키면 compute_week_range가 [base_date]로 접어
-                # 단일 날짜 제목이 경고 없이 발행된다. crawler와 같은 취급.
-                raise RuntimeError(f"KRX 거래일 빈 응답 ({start}~{end}) — 로그인 실패 가능")
-            return days
-        except Exception as e:
-            last = e
-            if attempt < KRX_RETRIES - 1:
-                logger.warning(
-                    f"KRX 거래일 조회 실패({e!r}) — 재시도 {attempt + 1}/{KRX_RETRIES - 1}")
-                time.sleep(KRX_RETRY_SLEEP)
-    raise last
-
-
 def _open_days(start: str, end: str) -> list[str]:
-    """개장일 목록 — KIS 1순위, 실패 시 KRX 폴백. 둘 다 실패하면 예외 전파."""
-    try:
-        return _kis_open_days(start, end)
-    except Exception as e:
-        logger.warning(f"KIS 휴장일 조회 실패({e!r}) → KRX 폴백")
-        return _krx_trading_days(start, end)
+    """개장일 목록 — KIS 휴장일 API. 실패하면 예외 전파(호출자가 달력으로 폴백).
+
+    예전의 2순위였던 KRX 스크래핑 계층은 제거했다 — KRX 가 자동화 수집을 IP 제한으로
+    제재한다 (SJAIINV-199).
+    """
+    return _kis_open_days(start, end)
 
 
 def _calendar_weekdays(start_dt: datetime, end_dt: datetime) -> list[str]:
@@ -126,14 +80,14 @@ def compute_week_range(base_date: str) -> str:
         days = _open_days(monday.strftime("%Y%m%d"), base_date)
     except Exception as e:
         logger.warning(
-            f"KRX 거래일 조회 실패({e}) → 달력 폴백. "
+            f"거래일 조회 실패({e}) → 달력 폴백. "
             "주간 범위는 월~금 전체를 쓴 **추정**이며 휴장일이 섞일 수 있다 "
             "— 보고서 제목·볼트 파일명이 실제 거래일과 다를 수 있음")
         days = _calendar_weekdays(monday, base)
     if not days:
         days = [base_date]
     if days and days[-1] != base_date:
-        logger.warning(f"주간 범위 끝({days[-1]})이 기준일({base_date})과 다름 — 공휴일 또는 KRX 데이터 지연 가능")
+        logger.warning(f"주간 범위 끝({days[-1]})이 기준일({base_date})과 다름 — 공휴일 또는 데이터 지연 가능")
     return days[0] if days[0] == days[-1] else f"{days[0]}~{days[-1][4:]}"
 
 

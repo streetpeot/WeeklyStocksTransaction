@@ -66,7 +66,7 @@ def build_etf_section(etf_flows, etf_market_agg, n: int = 5) -> str:
     lines = [
         "## ETF 수급",
         "",
-        "> 개별 ETF 기관·외국인 순매수(KRX 거래대금 기준, 억원). 시장 집계 및 순매수·순매도 상위 종목.",
+        "> 개별 ETF 기관·외국인 순매수(거래대금 기준, 억원). 집계 및 순매수·순매도 상위 종목.",
         "",
     ]
     if etf_market_agg:
@@ -76,7 +76,9 @@ def build_etf_section(etf_flows, etf_market_agg, n: int = 5) -> str:
             if k in etf_market_agg and etf_market_agg[k] is not None and pd.notna(etf_market_agg[k])
         ]
         if parts:
-            lines += ["**ETF 시장 전체**: " + " · ".join(parts), ""]
+            # 범위: KRX 시절에는 ETF 시장 전체 집계였고, KIS 이전 후에는 수집한 상위 N 의 합계다
+            label = etf_market_agg.get("범위", "ETF 시장 전체")
+            lines += [f"**{label}**: " + " · ".join(parts), ""]
 
     for title, sort_col, ascending, show_cols in _DIRECTIONS:
         lines.append(f"**{title}**")
